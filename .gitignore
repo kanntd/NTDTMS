@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+.wrangler/
+test-results/
+*.tsbuildinfo
+.DS_Store
+.obsidian/
+.pnpm-store/
+supabase/.temp/
