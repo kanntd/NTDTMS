@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Check, Plus } from "lucide-react";
 import { Button, EditableSelect, Field, Modal } from "./ui";
-import { BRANCH_OPTIONS } from "./intakeData";
+import { BRANCH_OPTIONS, PROVINCE_OPTIONS } from "./intakeData";
 import {
   entryId,
   measurementFields,
@@ -96,6 +96,15 @@ export default function IntakeEntryForm({
   ]
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b, "th"));
+  const provinces = [
+    ...new Set([
+      ...PROVINCE_OPTIONS,
+      ...parties.map((party) => party.province || ""),
+    ]),
+  ]
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, "th"));
+  const provinceRequired = mode === "receiver";
   const selectedUnit = unit.trim();
   const existingProduct = catalog.find(
     (c) => normalizeEntry(c.name) === normalizeEntry(name),
@@ -153,8 +162,12 @@ export default function IntakeEntryForm({
       });
       return;
     }
-    if (!province.trim() || !branch) {
-      setError("กรุณาระบุชื่อ จังหวัด และสาขา");
+    if ((provinceRequired && !province.trim()) || !branch) {
+      setError(
+        provinceRequired
+          ? "กรุณาระบุชื่อ จังหวัด และสาขา"
+          : "กรุณาระบุชื่อและสาขา",
+      );
       return;
     }
     const duplicate = parties.find(
@@ -299,20 +312,16 @@ export default function IntakeEntryForm({
                   onChange={(e) => setDistrict(e.target.value)}
                 />
               </Field>
-              <Field label="จังหวัด" required>
-                <input
-                  required
-                  list="intake-provinces"
+              <Field label="จังหวัด" required={provinceRequired}>
+                <EditableSelect
+                  required={provinceRequired}
                   value={province}
-                  onChange={(e) => setProvince(e.target.value)}
+                  options={provinces}
+                  onChange={setProvince}
+                  emptyLabel="ไม่ระบุจังหวัด"
+                  customLabel="เพิ่ม / แก้ไขจังหวัด"
+                  ariaLabel="จังหวัด"
                 />
-                <datalist id="intake-provinces">
-                  {["กรุงเทพมหานคร", "กำแพงเพชร", "พิษณุโลก", "สุโขทัย"].map(
-                    (p) => (
-                      <option key={p} value={p} />
-                    ),
-                  )}
-                </datalist>
               </Field>
               <Field label="สาขา" required>
                 <select

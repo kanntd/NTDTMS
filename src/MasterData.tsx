@@ -21,7 +21,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import { useWorkspace } from "./context";
-import { BRANCH_OPTIONS } from "./intakeData";
+import { BRANCH_OPTIONS, PROVINCE_OPTIONS } from "./intakeData";
 import {
   catalogName,
   loadIntakeRegistry,
@@ -395,6 +395,10 @@ export default function MasterData() {
           prefixes={mergeOptions(
             PARTY_PREFIXES,
             registry.parties.map((row) => row.prefix || ""),
+          )}
+          provinces={mergeOptions(
+            PROVINCE_OPTIONS,
+            registry.parties.map((row) => row.province || ""),
           )}
           defaultBranch={editor.id ? registry.defaults[editor.id] : ""}
           onClose={() => setEditor(null)}
@@ -1152,6 +1156,7 @@ function PartyEditor({
   role,
   value,
   prefixes,
+  provinces,
   defaultBranch,
   onClose,
   onSave,
@@ -1159,6 +1164,7 @@ function PartyEditor({
   role: "receiver" | "sender";
   value?: IntakeParty;
   prefixes: string[];
+  provinces: string[];
   defaultBranch: string;
   onClose: () => void;
   onSave: (party: IntakeParty, branch: string) => void;
@@ -1181,6 +1187,7 @@ function PartyEditor({
   });
   const set = (key: keyof typeof form, next: string) =>
     setForm((current) => ({ ...current, [key]: next }));
+  const provinceRequired = role === "receiver";
   return (
     <Modal
       title={`${value ? "แก้ไข" : "เพิ่ม"}${role === "receiver" ? "ผู้รับ" : "ผู้ส่ง"}`}
@@ -1265,11 +1272,15 @@ function PartyEditor({
               onChange={(e) => set("district", e.target.value)}
             />
           </Field>
-          <Field label="จังหวัด" required>
-            <input
-              required
+          <Field label="จังหวัด" required={provinceRequired}>
+            <EditableSelect
+              required={provinceRequired}
               value={form.province}
-              onChange={(e) => set("province", e.target.value)}
+              options={provinces}
+              onChange={(next) => set("province", next)}
+              emptyLabel="ไม่ระบุจังหวัด"
+              customLabel="เพิ่ม / แก้ไขจังหวัด"
+              ariaLabel="จังหวัด"
             />
           </Field>
           <Field label="สาขา" required>

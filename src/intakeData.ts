@@ -62,6 +62,13 @@ export const BRANCH_OPTIONS = [
   },
 ];
 
+export const PROVINCE_OPTIONS = [
+  "กรุงเทพมหานคร",
+  "กำแพงเพชร",
+  "พิษณุโลก",
+  "สุโขทัย",
+];
+
 export function receiverPreset(partyId?: string) {
   return RECEIVER_PRESETS.find((preset) => preset.receiverId === partyId);
 }
