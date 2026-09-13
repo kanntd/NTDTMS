@@ -16,6 +16,7 @@ import {
   STATUS_LABELS,
   type Shipment,
   type ShipmentDetail,
+  type Item,
 } from "./types";
 import Receipt from "./Receipt";
 
@@ -28,7 +29,9 @@ export default function Shipments({
 }) {
   const w = useWorkspace(),
     [search, setSearch] = useState(initialSearch),
-    [date, setDate] = useState(finance ? "" : localDate()),
+    [date, setDate] = useState(
+      finance || initialSearch.trim() ? "" : localDate(),
+    ),
     [zone, setZone] = useState(""),
     [status, setStatus] = useState(""),
     [page, setPage] = useState(0),
@@ -36,8 +39,12 @@ export default function Shipments({
     [count, setCount] = useState(0),
     [loading, setLoading] = useState(true),
     [failure, setFailure] = useState(""),
-    [detail, setDetail] = useState<ShipmentDetail | null>(null);
-  useEffect(() => setSearch(initialSearch), [initialSearch]);
+    [detail, setDetail] = useState<ShipmentDetail | null>(null),
+    [searchItems, setSearchItems] = useState<Record<string, Item[]>>({});
+  useEffect(() => {
+    setSearch(initialSearch);
+    if (initialSearch.trim()) setDate("");
+  }, [initialSearch]);
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -63,6 +70,32 @@ export default function Shipments({
       clearTimeout(timer);
     };
   }, [w.service, w.revision, search, date, zone, status, page, finance]);
+  useEffect(() => {
+    if (finance || !search.trim() || rows.length === 0) {
+      setSearchItems({});
+      return;
+    }
+    let active = true;
+    void Promise.allSettled(
+      rows.map(async (row) => {
+        if (row.items) return [row.id, row.items] as const;
+        const shipment = await w.service.detail(row.id);
+        return [row.id, shipment.items] as const;
+      }),
+    ).then((results) => {
+      if (!active) return;
+      setSearchItems(
+        Object.fromEntries(
+          results.flatMap((result) =>
+            result.status === "fulfilled" ? [result.value] : [],
+          ),
+        ),
+      );
+    });
+    return () => {
+      active = false;
+    };
+  }, [finance, rows, search, w.service]);
   function exportRows() {
     downloadCsv(
       "NTD-" +
@@ -205,11 +238,12 @@ export default function Shipments({
           <div className="input-icon search-field">
             <Search size={17} />
             <input
-              placeholder="ค้นหาเลขบิล ชื่อผู้ส่ง หรือผู้รับ"
+              placeholder="ค้นหาเลขบิล ผู้รับ ผู้ส่ง เบอร์โทร หรือสินค้า"
               aria-label="ค้นหาบิล"
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
+                if (e.target.value.trim()) setDate("");
                 setPage(0);
               }}
             />
@@ -275,6 +309,7 @@ export default function Shipments({
                 <tr>
                   <th>เลขบิล / เวลา</th>
                   <th>ผู้ส่ง / ผู้รับ</th>
+                  {!finance && <th>รายการสินค้า</th>}
                   <th>ปลายทาง</th>
                   <th>การชำระเงิน</th>
                   <th className="numeric">ค่าขนส่ง</th>
@@ -307,6 +342,31 @@ export default function Shipments({
                         {s.receiver_snapshot.display_name}
                       </small>
                     </td>
+                    {!finance && (
+                      <td>
+                        {(() => {
+                          const items = s.items || searchItems[s.id];
+                          if (!items)
+                            return (
+                              <span className="muted small">
+                                ค้นหาเพื่อแสดงรายการสินค้า
+                              </span>
+                            );
+                          return (
+                            <ul className="shipment-search-items">
+                              {items.map((item) => (
+                                <li key={item.id}>
+                                  <span>{item.description}</span>
+                                  <b>
+                                    {item.quantity} {item.unit}
+                                  </b>
+                                </li>
+                              ))}
+                            </ul>
+                          );
+                        })()}
+                      </td>
+                    )}
                     <td>
                       <span
                         className="province-label"

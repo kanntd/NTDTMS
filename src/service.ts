@@ -8,6 +8,23 @@ import type {
   ShipmentInput,
   StaffInvite,
 } from "./types";
+import { ROLE_MODULE_DEFAULTS } from "./types";
+import type { LoadConfirmation, LoadingQueueRecord } from "./types";
+import {
+  readReceptionBills,
+  receptionBillToShipment,
+  receptionLoadingQueue,
+  updateReceptionBillStatus,
+} from "./receptionStore";
+
+function allDemoShipments() {
+  const local = readReceptionBills().map(receptionBillToShipment);
+  const localIds = new Set(local.map((row) => row.id));
+  return [
+    ...local,
+    ...loadDemo().shipments.filter((row) => !localIds.has(row.id)),
+  ];
+}
 
 export function createService(demo: boolean) {
   return {
@@ -34,8 +51,8 @@ export function createService(demo: boolean) {
     ) => {
       if (!demo) return api.listShipments(options);
       const o = options || {};
-      const all = loadDemo()
-        .shipments.filter(
+      const all = allDemoShipments()
+        .filter(
           (s) =>
             (!o.date || localDate(new Date(s.received_at)) === o.date) &&
             (!o.zone || s.zone_id === o.zone) &&
@@ -45,7 +62,14 @@ export function createService(demo: boolean) {
               (
                 s.shipment_no +
                 s.sender_snapshot.display_name +
-                s.receiver_snapshot.display_name
+                s.sender_snapshot.phone +
+                s.receiver_snapshot.display_name +
+                s.receiver_snapshot.phone +
+                ("items" in s
+                  ? s.items
+                      .map((item) => item.description + item.unit)
+                      .join(" ")
+                  : "")
               )
                 .toLowerCase()
                 .includes(o.search.toLowerCase())),
@@ -61,6 +85,8 @@ export function createService(demo: boolean) {
     },
     detail: async (id: string) => {
       if (!demo) return api.getShipment(id);
+      const local = readReceptionBills().find((bill) => bill.id === id);
+      if (local) return receptionBillToShipment(local);
       const s = loadDemo().shipments.find((s) => s.id === id);
       if (!s) throw new Error("ไม่พบเอกสาร");
       return s;
@@ -116,6 +142,13 @@ export function createService(demo: boolean) {
     },
     status: async (doc: string, status: string, reason = "") => {
       if (!demo) return api.updateStatus(doc, status, reason);
+      if (
+        updateReceptionBillStatus(
+          doc,
+          status as "RECEIVED" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED",
+        )
+      )
+        return;
       const state = loadDemo(),
         s = state.shipments.find((s) => s.id === doc)!;
       if (
@@ -131,7 +164,7 @@ export function createService(demo: boolean) {
     },
     stats: async (date: string): Promise<DashboardStats> => {
       if (!demo) return api.getStats(date);
-      const rows = loadDemo().shipments.filter(
+      const rows = allDemoShipments().filter(
         (s) =>
           localDate(new Date(s.received_at)) === date &&
           s.shipment_status !== "CANCELLED",
@@ -151,9 +184,78 @@ export function createService(demo: boolean) {
         zones,
       };
     },
+    loadingQueue: async (): Promise<LoadingQueueRecord[]> => {
+      if (!demo) return api.getLoadingQueue();
+      const local = receptionLoadingQueue();
+      const localIds = new Set(local.map((row) => row.id));
+      const seeded = loadDemo()
+        .shipments.filter((row) => !localIds.has(row.id))
+        .map((row): LoadingQueueRecord => ({
+          id: row.id,
+          shipment_no: row.shipment_no,
+          received_at: row.received_at,
+          sender_snapshot: row.sender_snapshot,
+          receiver_snapshot: row.receiver_snapshot,
+          zone_id: row.zone_id,
+          district_id: row.district_id,
+          destination_branch_code: row.destination_branch_code,
+          total_amount: row.total_amount,
+          total_quantity: row.total_quantity,
+          shipment_status: row.shipment_status,
+          price_pending: row.price_pending,
+          items: row.items,
+        }));
+      return [...local, ...seeded].filter(
+        (row) => row.shipment_status === "RECEIVED",
+      );
+    },
+    confirmLoad: async (ids: string[], load: LoadConfirmation) => {
+      if (!demo) {
+        await Promise.all(ids.map((id) => api.updateStatus(id, "IN_TRANSIT")));
+        return;
+      }
+      const state = loadDemo();
+      for (const id of ids) {
+        if (updateReceptionBillStatus(id, "IN_TRANSIT", load)) continue;
+        const shipment = state.shipments.find((row) => row.id === id);
+        if (shipment) shipment.shipment_status = "IN_TRANSIT";
+      }
+      const manifests = JSON.parse(
+        localStorage.getItem("ntdtms-loading-manifests-v1") || "[]",
+      );
+      manifests.unshift({ ...load, shipmentIds: ids });
+      localStorage.setItem(
+        "ntdtms-loading-manifests-v1",
+        JSON.stringify(manifests),
+      );
+      saveDemo(state);
+    },
     setting: async (kind: string, data: Record<string, unknown>) => {
       if (!demo) return api.setting(kind, data);
       const state = loadDemo();
+      if (kind === "zone_save") {
+        const id = String(data.id);
+        const districts = Array.isArray(data.districts)
+          ? data.districts.map((district) => ({
+              id: String((district as { id: unknown }).id),
+              name: String((district as { name: unknown }).name),
+              zone_id: id,
+            }))
+          : [];
+        const value = {
+          id,
+          name: String(data.name),
+          code: String(data.code),
+          color: String(data.color),
+          sort_order: Number(data.sort_order),
+          districts,
+        };
+        const index = state.zones.findIndex((zone) => zone.id === id);
+        if (index >= 0) state.zones[index] = value;
+        else state.zones.push(value);
+      }
+      if (kind === "zone_delete")
+        state.zones = state.zones.filter((zone) => zone.id !== data.id);
       if (kind === "zone") {
         const z = state.zones.find((z) => z.id === data.id)!;
         z.name = String(data.name);
@@ -181,7 +283,10 @@ export function createService(demo: boolean) {
         const rows = existing.filter(
           (s: StaffInvite) => s.email !== data.email,
         );
-        rows.push(data);
+        rows.push({
+          ...data,
+          module_permissions: data.module_permissions || {},
+        });
         localStorage.setItem("ntdtms-demo-staff", JSON.stringify(rows));
       }
       saveDemo(state);
@@ -194,6 +299,7 @@ export function createService(demo: boolean) {
               display_name: "ผู้ดูแล NTD",
               role: "owner",
               is_active: true,
+              module_permissions: ROLE_MODULE_DEFAULTS.owner,
             },
             ...JSON.parse(localStorage.getItem("ntdtms-demo-staff") || "[]"),
           ]

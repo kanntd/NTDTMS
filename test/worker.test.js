@@ -30,4 +30,23 @@ describe("Cloudflare Pages Worker", () => {
       error: "R2 ยังไม่ได้เปิดในบัญชี Cloudflare",
     });
   });
+
+  it("blocks master document upload when the private R2 bucket is missing", async () => {
+    const response = await worker.fetch(
+      new Request(
+        "https://ntdtms.pages.dev/api/master-documents?ownerType=EMPLOYEE&owner=00000000-0000-0000-0000-000000000000&kind=ID_CARD",
+        {
+          method: "POST",
+          headers: { "content-type": "application/pdf" },
+          body: new TextEncoder().encode("%PDF-1.7"),
+        },
+      ),
+      {},
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: "R2 ยังไม่ได้เปิดในบัญชี Cloudflare",
+    });
+  });
 });

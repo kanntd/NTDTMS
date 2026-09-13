@@ -9,16 +9,26 @@ import {
   ShieldCheck,
   HardDrive,
   ExternalLink,
+  Trash2,
 } from "lucide-react";
 import { useWorkspace } from "./context";
 import { Button, Empty, Field, IconButton, Modal } from "./ui";
 import { money, thaiDate } from "./domain";
-import { ROLE_LABELS, type StaffInvite, type Zone, type Role } from "./types";
+import {
+  MODULE_LABELS,
+  ROLE_LABELS,
+  ROLE_MODULE_DEFAULTS,
+  type ModuleKey,
+  type StaffInvite,
+  type Zone,
+  type Role,
+} from "./types";
 
 export default function Settings() {
   const w = useWorkspace(),
     [tab, setTab] = useState("zones"),
     [zone, setZone] = useState<Zone | null>(null),
+    [creatingZone, setCreatingZone] = useState(false),
     [staff, setStaff] = useState<StaffInvite[]>([]),
     [person, setPerson] = useState<StaffInvite | null>(null),
     [price, setPrice] = useState<{
@@ -58,12 +68,43 @@ export default function Settings() {
     try {
       await fn();
       setZone(null);
+      setCreatingZone(false);
       setPerson(null);
       setPrice(null);
       w.refresh();
       w.toast("บันทึกการตั้งค่าแล้ว");
     } catch (e) {
       w.toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+  function openNewZone() {
+    const sortOrder = Math.max(0, ...w.zones.map((row) => row.sort_order)) + 1;
+    setCreatingZone(true);
+    setZone({
+      id: crypto.randomUUID(),
+      name: "",
+      code: `AREA-${String(sortOrder).padStart(3, "0")}`,
+      color: "#00cc99",
+      sort_order: sortOrder,
+      districts: [],
+    });
+  }
+  async function deleteZone(target: Zone) {
+    if (
+      !window.confirm(
+        `หยุดใช้พื้นที่ ${target.name} ใช่หรือไม่? บิลเก่าจะยังเก็บข้อมูลพื้นที่นี้ไว้`,
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      await w.service.setting("zone_delete", { id: target.id });
+      w.refresh();
+      w.toast(`หยุดใช้พื้นที่ ${target.name} แล้ว`);
+    } catch (error) {
+      w.toast((error as Error).message, true);
     } finally {
       setBusy(false);
     }
@@ -113,7 +154,13 @@ export default function Settings() {
         <section className="settings-section">
           <div className="section-heading">
             <h2>จังหวัดและอำเภอปลายทาง</h2>
-            <span className="muted">{w.zones.length} จังหวัด</span>
+            <div className="section-heading-actions">
+              <span className="muted">{w.zones.length} จังหวัด</span>
+              <Button className="primary" onClick={openNewZone}>
+                <Plus size={16} />
+                เพิ่มพื้นที่ให้บริการ
+              </Button>
+            </div>
           </div>
           {w.zones.map((z) => (
             <div className="zone-setting" key={z.id}>
@@ -132,12 +179,25 @@ export default function Settings() {
                   ))}
                 </div>
               </div>
-              <IconButton
-                label={"แก้ไขพื้นที่ " + z.name}
-                onClick={() => setZone(structuredClone(z))}
-              >
-                <Pencil size={17} />
-              </IconButton>
+              <div className="zone-setting-actions">
+                <IconButton
+                  label={"แก้ไขพื้นที่ " + z.name}
+                  onClick={() => {
+                    setCreatingZone(false);
+                    setZone(structuredClone(z));
+                  }}
+                >
+                  <Pencil size={17} />
+                </IconButton>
+                <IconButton
+                  label={"ลบพื้นที่ " + z.name}
+                  className="danger"
+                  disabled={busy}
+                  onClick={() => void deleteZone(z)}
+                >
+                  <Trash2 size={17} />
+                </IconButton>
+              </div>
             </div>
           ))}
         </section>
@@ -227,6 +287,7 @@ export default function Settings() {
                   display_name: "",
                   role: "clerk",
                   is_active: true,
+                  module_permissions: { ...ROLE_MODULE_DEFAULTS.clerk },
                 })
               }
             >
@@ -251,7 +312,17 @@ export default function Settings() {
                     <strong>{p.display_name}</strong>
                   </td>
                   <td>{p.email}</td>
-                  <td>{ROLE_LABELS[p.role]}</td>
+                  <td>
+                    {ROLE_LABELS[p.role]}
+                    <small className="permission-summary">
+                      {
+                        Object.values(
+                          p.module_permissions || ROLE_MODULE_DEFAULTS[p.role],
+                        ).filter(Boolean).length
+                      }{" "}
+                      โมดูล
+                    </small>
+                  </td>
                   <td>
                     <span
                       className={
@@ -340,28 +411,44 @@ export default function Settings() {
       )}
       {zone && (
         <Modal
-          title="แก้ไขพื้นที่ให้บริการ"
-          onClose={busy ? () => {} : () => setZone(null)}
+          title={
+            creatingZone ? "เพิ่มพื้นที่ให้บริการ" : "แก้ไขพื้นที่ให้บริการ"
+          }
+          onClose={
+            busy
+              ? () => {}
+              : () => {
+                  setZone(null);
+                  setCreatingZone(false);
+                }
+          }
         >
           <form
             className="modal-form"
             onSubmit={(e) =>
-              save(e, async () => {
-                await w.service.setting("zone", {
+              save(e, () =>
+                w.service.setting("zone_save", {
                   id: zone.id,
-                  name: zone.name,
+                  name: zone.name.trim(),
+                  code: zone.code,
                   color: zone.color,
-                });
-                for (const d of zone.districts)
-                  await w.service.setting("district", {
-                    id: d.id,
-                    name: d.name,
-                  });
-              })
+                  sort_order: zone.sort_order,
+                  is_new: creatingZone,
+                  districts: zone.districts
+                    .filter((district) => district.name.trim())
+                    .map((district) => ({
+                      id: district.id,
+                      name: district.name.trim(),
+                    })),
+                }),
+              )
             }
           >
             <div className="two-fields">
-              <Field label="จังหวัด">
+              <Field label="รหัสพื้นที่">
+                <input value={zone.code} readOnly />
+              </Field>
+              <Field label="จังหวัด" required>
                 <input
                   required
                   value={zone.name}
@@ -376,22 +463,70 @@ export default function Settings() {
                 />
               </Field>
             </div>
-            {zone.districts.map((d, n) => (
-              <Field key={d.id} label={"อำเภอ " + (n + 1)}>
-                <input
-                  required
-                  value={d.name}
-                  onChange={(e) =>
-                    setZone({
-                      ...zone,
-                      districts: zone.districts.map((x) =>
-                        x.id === d.id ? { ...x, name: e.target.value } : x,
-                      ),
-                    })
-                  }
-                />
-              </Field>
-            ))}
+            <div className="district-editor-heading">
+              <div>
+                <strong>อำเภอที่ให้บริการ</strong>
+                <small>ไม่บังคับ สามารถเว้นว่างและเพิ่มภายหลังได้</small>
+              </div>
+              <Button
+                type="button"
+                onClick={() =>
+                  setZone({
+                    ...zone,
+                    districts: [
+                      ...zone.districts,
+                      {
+                        id: crypto.randomUUID(),
+                        zone_id: zone.id,
+                        name: "",
+                      },
+                    ],
+                  })
+                }
+              >
+                <Plus size={15} />
+                เพิ่มอำเภอ
+              </Button>
+            </div>
+            <div className="district-editor-list">
+              {zone.districts.map((district, index) => (
+                <div key={district.id}>
+                  <Field label={`อำเภอ ${index + 1}`}>
+                    <input
+                      autoFocus={index === zone.districts.length - 1}
+                      value={district.name}
+                      onChange={(event) =>
+                        setZone({
+                          ...zone,
+                          districts: zone.districts.map((row) =>
+                            row.id === district.id
+                              ? { ...row, name: event.target.value }
+                              : row,
+                          ),
+                        })
+                      }
+                    />
+                  </Field>
+                  <IconButton
+                    label={`ลบอำเภอ ${district.name || index + 1}`}
+                    className="danger"
+                    onClick={() =>
+                      setZone({
+                        ...zone,
+                        districts: zone.districts.filter(
+                          (row) => row.id !== district.id,
+                        ),
+                      })
+                    }
+                  >
+                    <Trash2 size={16} />
+                  </IconButton>
+                </div>
+              ))}
+              {zone.districts.length === 0 && (
+                <p>ยังไม่ได้ระบุอำเภอ พื้นที่นี้ยังบันทึกได้</p>
+              )}
+            </div>
             <div className="modal-footer">
               <Button className="primary" type="submit" busy={busy}>
                 บันทึกพื้นที่
@@ -434,7 +569,13 @@ export default function Settings() {
               <select
                 value={person.role}
                 onChange={(e) =>
-                  setPerson({ ...person, role: e.target.value as Role })
+                  setPerson({
+                    ...person,
+                    role: e.target.value as Role,
+                    module_permissions: {
+                      ...ROLE_MODULE_DEFAULTS[e.target.value as Role],
+                    },
+                  })
                 }
               >
                 {Object.entries(ROLE_LABELS)
@@ -446,6 +587,38 @@ export default function Settings() {
                   ))}
               </select>
             </Field>
+            <fieldset className="permission-grid">
+              <legend>โมดูลที่เข้าใช้งานได้</legend>
+              {(Object.entries(MODULE_LABELS) as [ModuleKey, string][]).map(
+                ([id, label]) => (
+                  <label key={id}>
+                    <input
+                      type="checkbox"
+                      checked={
+                        person.module_permissions?.[id] ??
+                        ROLE_MODULE_DEFAULTS[person.role][id] ??
+                        false
+                      }
+                      onChange={(event) =>
+                        setPerson({
+                          ...person,
+                          module_permissions: {
+                            ...ROLE_MODULE_DEFAULTS[person.role],
+                            ...person.module_permissions,
+                            [id]: event.target.checked,
+                          },
+                        })
+                      }
+                    />
+                    {label}
+                  </label>
+                ),
+              )}
+            </fieldset>
+            <p className="settings-note">
+              ข้อมูลพนักงานเก็บในข้อมูลหลัก
+              ส่วนหน้านี้ใช้กำหนดบัญชีเข้าสู่ระบบและสิทธิ์เท่านั้น
+            </p>
             <label className="checkbox-line">
               <input
                 type="checkbox"

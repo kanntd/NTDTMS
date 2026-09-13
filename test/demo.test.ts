@@ -1,16 +1,23 @@
 import { describe, expect, it } from "vitest";
-import {
-  createDemoShipment,
-  demoParties,
-  demoProducts,
-  demoZones,
-  type DemoState,
-} from "../src/demo";
+import { createDemoShipment, demoZones, type DemoState } from "../src/demo";
+
+const sender = {
+  id: "test-sender",
+  display_name: "ผู้ส่งสำหรับทดสอบ",
+  phone: "",
+  address: "",
+};
+const receiver = {
+  id: "test-receiver",
+  display_name: "ผู้รับสำหรับทดสอบ",
+  phone: "",
+  address: "",
+};
 
 function state(): DemoState {
   return {
     shipments: [],
-    parties: structuredClone(demoParties),
+    parties: [],
     zones: structuredClone(demoZones),
     rules: [],
   };
@@ -32,8 +39,8 @@ describe("demo data", () => {
     const demo = state();
     const shipment = createDemoShipment(demo, {
       request_id: crypto.randomUUID(),
-      sender: demoParties[0],
-      receiver: demoParties[3],
+      sender,
+      receiver,
       zone_id: demoZones[1].id,
       district_id: demoZones[1].districts[0].id,
       payment_mode: "CASH_ORIGIN",
@@ -41,10 +48,10 @@ describe("demo data", () => {
       items: [
         {
           id: crypto.randomUUID(),
-          product_id: demoProducts[0].id,
-          description: demoProducts[0].name,
+          product_id: "test-product",
+          description: "สินค้าสำหรับทดสอบ",
           quantity: 2,
-          unit: demoProducts[0].unit,
+          unit: "กล่อง",
           unit_price: 40,
           weight: 0,
           fragile: false,

@@ -1,18 +1,29 @@
 export type PaymentMode =
   "CASH_ORIGIN" | "CASH_DESTINATION" | "CREDIT_ORIGIN" | "CREDIT_DESTINATION";
 export type Role = "owner" | "admin" | "clerk" | "accountant" | "viewer";
+export type ModuleKey =
+  | "intake"
+  | "shipments"
+  | "master_data"
+  | "pricing"
+  | "finance"
+  | "reports"
+  | "settings";
+export type ModulePermissions = Partial<Record<ModuleKey, boolean>>;
 export interface Zone {
   id: string;
   name: string;
   color: string;
   code: string;
   sort_order: number;
+  is_active?: boolean;
   districts: District[];
 }
 export interface District {
   id: string;
   name: string;
   zone_id: string;
+  is_active?: boolean;
 }
 export interface Party {
   id: string;
@@ -37,6 +48,7 @@ export interface Profile {
   company_id: string;
   branch_id: string;
   is_active: boolean;
+  module_permissions?: ModulePermissions;
 }
 export interface Item {
   id: string;
@@ -100,6 +112,9 @@ export interface Shipment {
   invoice_id: string;
   due_date: string;
   created_by: string;
+  destination_branch_code?: string;
+  price_pending?: boolean;
+  items?: Item[];
 }
 export interface ShipmentDetail extends Shipment {
   items: Item[];
@@ -112,6 +127,29 @@ export interface ShipmentFile {
   filename: string;
   mime_type: string;
   byte_size: number;
+}
+export interface LoadingQueueRecord {
+  id: string;
+  shipment_no: string;
+  received_at: string;
+  sender_snapshot: PartySnapshot;
+  receiver_snapshot: PartySnapshot;
+  zone_id: string;
+  district_id: string;
+  destination_branch_code?: string;
+  total_amount: number;
+  total_quantity: number;
+  shipment_status: Shipment["shipment_status"];
+  price_pending?: boolean;
+  items: Item[];
+}
+export interface LoadConfirmation {
+  manifestNo: string;
+  vehicleId: string;
+  vehicleNo: string;
+  driverId: string;
+  driverName: string;
+  confirmedAt: string;
 }
 export interface PriceRule {
   id: string;
@@ -128,6 +166,7 @@ export interface StaffInvite {
   display_name: string;
   role: Role;
   is_active: boolean;
+  module_permissions?: ModulePermissions;
 }
 export interface DashboardStats {
   count: number;
@@ -149,6 +188,39 @@ export const ROLE_LABELS: Record<Role, string> = {
   clerk: "พนักงานรับสินค้า",
   accountant: "การเงิน",
   viewer: "ดูข้อมูล",
+};
+
+export const MODULE_LABELS: Record<ModuleKey, string> = {
+  intake: "รับสินค้าและออกบิล",
+  shipments: "รายการขนส่ง",
+  master_data: "ข้อมูลหลัก",
+  pricing: "ราคาและคำขอราคา",
+  finance: "รับชำระและยอดค้าง",
+  reports: "รายงาน",
+  settings: "ตั้งค่าบริษัท",
+};
+
+export const ROLE_MODULE_DEFAULTS: Record<Role, ModulePermissions> = {
+  owner: Object.fromEntries(
+    Object.keys(MODULE_LABELS).map((key) => [key, true]),
+  ) as ModulePermissions,
+  admin: {
+    intake: true,
+    shipments: true,
+    master_data: true,
+    pricing: true,
+    finance: true,
+    reports: true,
+    settings: true,
+  },
+  clerk: { intake: true, shipments: true },
+  accountant: {
+    shipments: true,
+    pricing: true,
+    finance: true,
+    reports: true,
+  },
+  viewer: { shipments: true, reports: true },
 };
 export const STATUS_LABELS = {
   RECEIVED: "รับสินค้าแล้ว",

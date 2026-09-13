@@ -1,11 +1,13 @@
 const DEFAULT_SUPABASE_URL = "https://giejnvnnbgzlqfzvfzzf.supabase.co";
 const DEFAULT_SUPABASE_KEY = "sb_publishable_pjWjOPt2dsun2ZdXu1vYAg_4H0mDVrX";
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_MASTER_BYTES = 15 * 1024 * 1024;
 const IMAGE_TYPES = new Map([
   ["image/jpeg", "jpg"],
   ["image/png", "png"],
   ["image/webp", "webp"],
 ]);
+const MASTER_TYPES = new Map([...IMAGE_TYPES, ["application/pdf", "pdf"]]);
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -100,14 +102,151 @@ async function readFileRow(env, token, id) {
   return rows[0];
 }
 
-async function cappedBody(request) {
+async function cappedBody(request, limit = MAX_IMAGE_BYTES) {
   const size = Number(request.headers.get("content-length") || "0");
-  if (size > MAX_IMAGE_BYTES) throw json({ error: "รูปต้องไม่เกิน 5 MB" }, 413);
+  if (size > limit) throw json({ error: "ไฟล์มีขนาดใหญ่เกินกำหนด" }, 413);
   const body = await request.arrayBuffer();
   if (body.byteLength === 0) throw json({ error: "ไม่พบไฟล์รูป" }, 400);
-  if (body.byteLength > MAX_IMAGE_BYTES)
-    throw json({ error: "รูปต้องไม่เกิน 5 MB" }, 413);
+  if (body.byteLength > limit)
+    throw json({ error: "ไฟล์มีขนาดใหญ่เกินกำหนด" }, 413);
   return body;
+}
+
+function assertMasterMagic(mime, body) {
+  if (mime !== "application/pdf") return assertImageMagic(mime, body);
+  const bytes = new Uint8Array(body.slice(0, 5));
+  const pdf =
+    bytes[0] === 0x25 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x44 &&
+    bytes[3] === 0x46 &&
+    bytes[4] === 0x2d;
+  if (!pdf) throw json({ error: "ชนิดไฟล์ PDF ไม่ตรงกับไฟล์จริง" }, 415);
+}
+
+async function readMasterOwner(env, token, profile, ownerType, ownerId) {
+  const url = env.SUPABASE_URL || DEFAULT_SUPABASE_URL;
+  const table = ownerType === "EMPLOYEE" ? "employees" : "vehicle_assets";
+  const response = await fetch(
+    `${url}/rest/v1/${table}?select=id,company_id&id=eq.${encodeURIComponent(ownerId)}&company_id=eq.${encodeURIComponent(profile.company_id)}&limit=1`,
+    { headers: supabaseHeaders(env, token) },
+  );
+  if (!response.ok) throw json({ error: "ตรวจเจ้าของเอกสารไม่สำเร็จ" }, 403);
+  const rows = await response.json();
+  if (!rows[0]) throw json({ error: "ไม่พบพนักงานหรือรถในบริษัทนี้" }, 404);
+  return rows[0];
+}
+
+async function registerMasterFile(env, token, profile, payload) {
+  const url = env.SUPABASE_URL || DEFAULT_SUPABASE_URL;
+  const response = await fetch(
+    `${url}/rest/v1/master_documents?select=id,filename`,
+    {
+      method: "POST",
+      headers: {
+        ...supabaseHeaders(env, token),
+        prefer: "return=representation",
+      },
+      body: JSON.stringify({ company_id: profile.company_id, ...payload }),
+    },
+  );
+  const text = await response.text();
+  if (!response.ok) {
+    let message = "บันทึกข้อมูลเอกสารไม่สำเร็จ";
+    try {
+      message = JSON.parse(text).message || message;
+    } catch {}
+    throw json({ error: message }, 400);
+  }
+  return JSON.parse(text)[0];
+}
+
+async function uploadMasterDocument(request, env) {
+  if (!env.IMAGES)
+    return json({ error: "R2 ยังไม่ได้เปิดในบัญชี Cloudflare" }, 503);
+  const token = requireToken(request);
+  const profile = await readProfile(env, token);
+  if (!["owner", "admin"].includes(profile.role))
+    return json({ error: "เฉพาะผู้ดูแลเท่านั้นที่จัดการเอกสารหลักได้" }, 403);
+  const url = new URL(request.url);
+  const ownerType = url.searchParams.get("ownerType") || "";
+  const ownerId = url.searchParams.get("owner") || "";
+  const kind = url.searchParams.get("kind") || "OTHER";
+  const expiresOn = url.searchParams.get("expires") || null;
+  if (
+    !["EMPLOYEE", "VEHICLE"].includes(ownerType) ||
+    !/^[0-9a-f-]{36}$/i.test(ownerId)
+  )
+    return json({ error: "เจ้าของเอกสารไม่ถูกต้อง" }, 400);
+  if (
+    ![
+      "ID_CARD",
+      "DRIVER_LICENSE",
+      "VEHICLE_REGISTRATION",
+      "INSURANCE",
+      "OTHER",
+    ].includes(kind)
+  )
+    return json({ error: "ประเภทเอกสารไม่ถูกต้อง" }, 400);
+  await readMasterOwner(env, token, profile, ownerType, ownerId);
+  const mime = request.headers.get("content-type") || "";
+  const extension = MASTER_TYPES.get(mime);
+  if (!extension)
+    return json({ error: "รองรับเฉพาะ JPG, PNG, WebP และ PDF" }, 415);
+  const body = await cappedBody(request, MAX_MASTER_BYTES);
+  assertMasterMagic(mime, body);
+  const filename = safeName(request.headers.get("x-filename"));
+  const objectKey = `${profile.company_id}/master/${ownerType.toLowerCase()}/${ownerId}/${crypto.randomUUID()}.${extension}`;
+  await env.IMAGES.put(objectKey, body, {
+    httpMetadata: { contentType: mime },
+    customMetadata: { filename, owner_type: ownerType, owner_id: ownerId },
+  });
+  try {
+    const row = await registerMasterFile(env, token, profile, {
+      owner_type: ownerType,
+      employee_id: ownerType === "EMPLOYEE" ? ownerId : null,
+      vehicle_id: ownerType === "VEHICLE" ? ownerId : null,
+      document_kind: kind,
+      object_key: objectKey,
+      filename,
+      mime_type: mime,
+      byte_size: body.byteLength,
+      expires_on: expiresOn,
+      created_by: profile.id,
+    });
+    return json(row);
+  } catch (error) {
+    await env.IMAGES.delete(objectKey);
+    throw error;
+  }
+}
+
+async function downloadMasterDocument(request, env, id) {
+  if (!env.IMAGES)
+    return json({ error: "R2 ยังไม่ได้เปิดในบัญชี Cloudflare" }, 503);
+  const token = requireToken(request);
+  const profile = await readProfile(env, token);
+  if (!["owner", "admin"].includes(profile.role))
+    return json({ error: "ไม่มีสิทธิ์เปิดเอกสารหลัก" }, 403);
+  const url = env.SUPABASE_URL || DEFAULT_SUPABASE_URL;
+  const response = await fetch(
+    `${url}/rest/v1/master_documents?select=id,object_key,filename,mime_type,byte_size&id=eq.${encodeURIComponent(id)}&company_id=eq.${encodeURIComponent(profile.company_id)}&is_active=eq.true&limit=1`,
+    { headers: supabaseHeaders(env, token) },
+  );
+  if (!response.ok) throw json({ error: "เปิดข้อมูลเอกสารไม่สำเร็จ" }, 403);
+  const rows = await response.json();
+  if (!rows[0]) throw json({ error: "ไม่พบเอกสารหรือไม่มีสิทธิ์" }, 404);
+  const object = await env.IMAGES.get(rows[0].object_key);
+  if (!object) return json({ error: "ไม่พบไฟล์ใน R2" }, 404);
+  return new Response(object.body, {
+    headers: {
+      "content-type": rows[0].mime_type,
+      "content-length": String(rows[0].byte_size),
+      "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(rows[0].filename)}`,
+      "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff",
+    },
+  });
 }
 
 function assertImageMagic(mime, body) {
@@ -211,11 +350,23 @@ export default {
       if (url.pathname === "/api/photos" && request.method === "POST") {
         return uploadPhoto(request, env);
       }
+      if (
+        url.pathname === "/api/master-documents" &&
+        request.method === "POST"
+      ) {
+        return uploadMasterDocument(request, env);
+      }
       const photoMatch = url.pathname.match(
         /^\/api\/photos\/([0-9a-f-]{36})$/i,
       );
       if (photoMatch && request.method === "GET") {
         return downloadPhoto(request, env, photoMatch[1]);
+      }
+      const masterDocumentMatch = url.pathname.match(
+        /^\/api\/master-documents\/([0-9a-f-]{36})$/i,
+      );
+      if (masterDocumentMatch && request.method === "GET") {
+        return downloadMasterDocument(request, env, masterDocumentMatch[1]);
       }
       return json({ error: "ไม่พบ API" }, 404);
     } catch (error) {

@@ -16,12 +16,18 @@ import {
   MapPin,
   Menu,
   ShieldCheck,
+  Database,
+  Tags,
+  LayoutDashboard,
+  PackageCheck,
 } from "lucide-react";
 import { supabase, getProfile } from "./api";
 import { createService } from "./service";
 import { WorkspaceContext } from "./context";
 import {
   ROLE_LABELS,
+  ROLE_MODULE_DEFAULTS,
+  type ModuleKey,
   type Profile,
   type Product,
   type PriceRule,
@@ -31,9 +37,14 @@ import { thaiDate } from "./domain";
 import { Button, Field, IconButton, Loading, Modal } from "./ui";
 import Auth from "./Auth";
 import Intake from "./Intake";
+import IntakePrototype from "./IntakePrototype";
 import Shipments from "./Shipments";
 import Customers from "./Customers";
 import Settings from "./Settings";
+import MasterData from "./MasterData";
+import Pricing from "./Pricing";
+import BangkokDashboard from "./BangkokDashboard";
+import LoadingWork from "./LoadingWork";
 
 const demoProfile: Profile = {
   id: "demo",
@@ -43,6 +54,7 @@ const demoProfile: Profile = {
   company_id: "demo",
   branch_id: "demo",
   is_active: true,
+  module_permissions: ROLE_MODULE_DEFAULTS.owner,
 };
 export default function App() {
   const [demo, setDemo] = useState(
@@ -58,6 +70,7 @@ export default function App() {
   const [page, setPage] = useState("intake"),
     [globalSearch, setGlobalSearch] = useState(""),
     [query, setQuery] = useState(""),
+    [loadBranch, setLoadBranch] = useState(""),
     [revision, setRevision] = useState(0),
     [masters, setMasters] = useState<{
       zones: Zone[];
@@ -200,16 +213,47 @@ export default function App() {
       </div>
     );
   }
-  const manager = ["owner", "admin"].includes(profile.role),
-    canIssue = ["owner", "admin", "clerk"].includes(profile.role);
+  const manager = ["owner", "admin"].includes(profile.role);
+  const canOpen = (module: ModuleKey) =>
+    profile.role === "owner" ||
+    (profile.module_permissions?.[module] ??
+      ROLE_MODULE_DEFAULTS[profile.role][module] ??
+      false);
   const nav = [
-    ...(canIssue
+    ...(canOpen("intake")
+      ? [
+          {
+            id: "dashboard",
+            label: "ภาพรวมกรุงเทพฯ",
+            Icon: LayoutDashboard,
+          },
+        ]
+      : []),
+    ...(canOpen("intake")
       ? [{ id: "intake", label: "รับสินค้าและออกบิล", Icon: FilePlus2 }]
       : []),
-    { id: "shipments", label: "รายการขนส่ง", Icon: ListOrdered },
-    { id: "customers", label: "ลูกค้าและคู่ค้า", Icon: UsersRound },
-    { id: "finance", label: "รับชำระและยอดค้าง", Icon: Wallet },
-    ...(manager
+    ...(canOpen("shipments")
+      ? [{ id: "loading", label: "งานขึ้นรถ", Icon: PackageCheck }]
+      : []),
+    ...(canOpen("shipments")
+      ? [{ id: "shipments", label: "รายการขนส่ง", Icon: ListOrdered }]
+      : []),
+    ...(canOpen("master_data")
+      ? [
+          {
+            id: "customers",
+            label: demo ? "ข้อมูลหลัก" : "ลูกค้าและคู่ค้า",
+            Icon: demo ? Database : UsersRound,
+          },
+        ]
+      : []),
+    ...(canOpen("pricing") && demo
+      ? [{ id: "pricing", label: "ราคาและคำขอราคา", Icon: Tags }]
+      : []),
+    ...(canOpen("finance")
+      ? [{ id: "finance", label: "รับชำระและยอดค้าง", Icon: Wallet }]
+      : []),
+    ...(manager && canOpen("settings")
       ? [{ id: "settings", label: "ตั้งค่าบริษัท", Icon: SettingsIcon }]
       : []),
   ];
@@ -249,6 +293,7 @@ export default function App() {
                 onClick={() => {
                   setPage(id);
                   if (id === "shipments") setQuery("");
+                  if (id === "loading") setLoadBranch("");
                   setMenu(false);
                 }}
               >
@@ -318,7 +363,7 @@ export default function App() {
             <div className="demo-bar">
               <span>
                 <FlaskIcon />
-                โหมดทดลอง <b>ข้อมูลตัวอย่างแยกจากงานจริง</b>
+                โหมดทดลอง <b>ข้อมูลในเครื่องนี้แยกจากงานจริง</b>
               </span>
               <button onClick={() => void logout()}>
                 เข้าสู่ระบบบริษัท <span>→</span>
@@ -339,12 +384,31 @@ export default function App() {
               </div>
             ) : masters.zones.length === 0 ? (
               <Loading />
+            ) : page === "dashboard" ? (
+              <BangkokDashboard
+                onOpenBranch={(branchCode) => {
+                  setLoadBranch(branchCode);
+                  setPage("loading");
+                }}
+              />
             ) : page === "intake" ? (
-              <Intake />
+              demo ? (
+                <IntakePrototype />
+              ) : (
+                <Intake />
+              )
+            ) : page === "loading" ? (
+              <LoadingWork initialBranch={loadBranch} />
             ) : page === "shipments" ? (
               <Shipments initialSearch={query} />
             ) : page === "customers" ? (
-              <Customers />
+              demo ? (
+                <MasterData />
+              ) : (
+                <Customers />
+              )
+            ) : page === "pricing" && demo ? (
+              <Pricing />
             ) : page === "finance" ? (
               <Shipments key="finance" finance />
             ) : manager ? (

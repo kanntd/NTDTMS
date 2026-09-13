@@ -201,7 +201,7 @@ export default function Auth({ onDemo }: { onDemo: () => void }) {
           </div>
           <div className="auth-demo">
             <Button onClick={onDemo}>
-              ทดลองใช้งานด้วยข้อมูลตัวอย่าง
+              เปิดพื้นที่ทดลองบนเครื่องนี้
               <ArrowRight size={17} />
             </Button>
           </div>

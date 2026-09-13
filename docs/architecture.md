@@ -18,7 +18,8 @@
 ใช้ Supabase Auth + PostgreSQL + RLS เป็นแกนกลาง
 
 - ทุกตาราง public เปิด Row Level Security
-- ตอนนี้ใช้ owner/admin สูงสุดเป็นหลัก ส่วนพนักงานหลายบทบาทและ branch scope ละเอียดเก็บไว้เป็นงานเดือนหน้า
+- แยกข้อมูลพนักงานออกจากบัญชีเข้าใช้ระบบ พนักงานหนึ่งคนอาจไม่มีบัญชี และบัญชีที่มีสิทธิ์จะกำหนดการเข้าใช้เป็นรายโมดูล
+- role เป็นค่าเริ่มต้นของสิทธิ์ ส่วน `module_permissions` ใช้ปรับเฉพาะคน เช่น ราคา การเงิน รายงาน และตั้งค่าบริษัท
 - การเขียนข้อมูลหลักผ่าน RPC ที่ validate ฝั่งฐานข้อมูล
 - เลขบิล/ใบแจ้งหนี้/ใบรับเงินออกแบบ atomic ด้วย sequence ต่อสาขาและเดือน
 - snapshot ผู้ส่ง/ผู้รับถูกเก็บใน shipment เพื่อให้ประวัติบิลไม่เปลี่ยนเมื่อแก้ข้อมูลลูกค้า
@@ -54,6 +55,8 @@ V2 ใช้ Modular Monolith คือแยก module ชัดเจนบน
 ตาราง V2 foundation ที่เพิ่มแล้ว:
 
 - `price_books`, `price_book_lines`, `price_tiers`
+- `customer_relations`, `receiver_product_links`
+- `contract_price_agreements`, `contract_price_versions`, `price_requests`
 - `shipment_collections`, `remittance_slips`
 - `branch_receiving_transactions`, `branch_receiving_items`
 - `billing_batches`, `billing_batch_lines`
@@ -61,6 +64,8 @@ V2 ใช้ Modular Monolith คือแยก module ชัดเจนบน
 - `chart_of_accounts`, `journal_entries`, `journal_lines`
 - `trip_runs`, `trip_run_shipments`, `v2_trip_profit`
 - `vehicle_assets`, `drivers`, `fuel_logs`, `maintenance_orders`
+- `employees`, `vehicle_driver_assignments`, `master_documents`
+- `module_permissions` บนบัญชีพนักงาน และเลขพนักงาน/เลขรถที่สร้างแบบ atomic ต่อบริษัท
 - `inventory_locations`, `inventory_items`, `inventory_movements`
 - `approval_workflows`, `approval_requests`, `document_reversals`
 - `report_snapshots`, `integration_connections`, `v2_module_overview`
@@ -76,6 +81,8 @@ Supabase Free มีพื้นที่ database 500 MB และไม่ม�
 - `/api/status` เช็คว่า R2 binding พร้อมไหม
 - `/api/photos` upload รูปสินค้าเมื่อ login แล้วเท่านั้น
 - `/api/photos/:id` อ่านรูปผ่าน RLS และ Worker ไม่เปิด public bucket
+- `/api/master-documents` อัปโหลดเอกสารพนักงาน/รถหลายไฟล์ โดย owner/admin เท่านั้น
+- `/api/master-documents/:id` อ่านเอกสารผ่าน Worker หลังตรวจบริษัทและสิทธิ์
 - R2 bucket ยังต้องเปิดใน Cloudflare Dashboard ก่อนใช้งานจริง เพราะบัญชีนี้ยังตอบว่า R2 ยังไม่ enabled
 
 ## Data Growth
@@ -84,6 +91,8 @@ Supabase Free มีพื้นที่ database 500 MB และไม่ม�
 
 - เก็บรูปใน R2 ไม่เก็บใน Supabase database
 - จำกัดรูป 5 MB และรับเฉพาะ JPG/PNG/WebP
+- เอกสารหลักจำกัด 15 MB ต่อไฟล์ รองรับ JPG/PNG/WebP/PDF และเก็บเฉพาะ metadata ใน Supabase
+- ประวัติราคาห้ามแก้ย้อนหลัง ราคาปัจจุบันชี้ไปยังเวอร์ชันล่าสุด
 - table รายการบิลทำ index ตาม FK/วัน/ลูกค้า/พื้นที่ไว้แล้ว
 - foreign key ทุกจุดมี index รองรับแล้ว 194 constraints
 - เก็บ audit log แยกสำหรับตรวจย้อนหลัง

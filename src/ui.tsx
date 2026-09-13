@@ -2,6 +2,7 @@ import {
   useEffect,
   useId,
   useRef,
+  useState,
   type ReactNode,
   type ButtonHTMLAttributes,
 } from "react";
@@ -71,6 +72,68 @@ export function Field({
     </label>
   );
 }
+
+export function EditableSelect({
+  value,
+  options,
+  onChange,
+  required = false,
+  emptyLabel = "ไม่ระบุ",
+  customLabel = "เพิ่ม / แก้ไขรายการ",
+  ariaLabel,
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  required?: boolean;
+  emptyLabel?: string;
+  customLabel?: string;
+  ariaLabel?: string;
+}) {
+  const choices = [
+    ...new Set(options.map((item) => item.trim()).filter(Boolean)),
+  ];
+  const [custom, setCustom] = useState(
+    Boolean(value && !choices.includes(value)),
+  );
+  return (
+    <div className="editable-select">
+      <select
+        aria-label={ariaLabel}
+        required={required}
+        value={custom ? "__custom__" : value}
+        onChange={(event) => {
+          if (event.target.value === "__custom__") {
+            setCustom(true);
+            onChange("");
+            return;
+          }
+          setCustom(false);
+          onChange(event.target.value);
+        }}
+      >
+        {!required && <option value="">{emptyLabel}</option>}
+        {choices.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+        <option value="__custom__">＋ {customLabel}</option>
+      </select>
+      {custom && (
+        <input
+          autoFocus
+          aria-label={ariaLabel ? `${ariaLabel}ใหม่` : undefined}
+          required={required}
+          value={value}
+          placeholder="พิมพ์รายการใหม่"
+          onChange={(event) => onChange(event.target.value)}
+        />
+      )}
+    </div>
+  );
+}
+
 export function Modal({
   title,
   children,

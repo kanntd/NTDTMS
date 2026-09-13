@@ -10,6 +10,7 @@ import type {
   Product,
   StaffInvite,
   DashboardStats,
+  LoadingQueueRecord,
 } from "./types";
 
 export const supabase = createClient(
@@ -35,7 +36,11 @@ export async function getProfile(id: string): Promise<Profile | null> {
 }
 export async function getMasters() {
   const [zones, products, rules] = await Promise.all([
-    supabase.from("service_zones").select("*,districts(*)").order("sort_order"),
+    supabase
+      .from("service_zones")
+      .select("*,districts(*)")
+      .eq("is_active", true)
+      .order("sort_order"),
     supabase.from("products").select("*").order("name"),
     supabase
       .from("price_rules")
@@ -44,7 +49,12 @@ export async function getMasters() {
       .limit(500),
   ]);
   return {
-    zones: check(zones) as Zone[],
+    zones: (check(zones) as Zone[]).map((zone) => ({
+      ...zone,
+      districts: zone.districts.filter(
+        (district) => district.is_active !== false,
+      ),
+    })),
     products: check(products) as Product[],
     rules: check(rules) as PriceRule[],
   };
@@ -93,8 +103,18 @@ export async function listShipments(
   }
   if (options.search && clean(options.search)) {
     const s = clean(options.search);
+    const itemMatches = await supabase
+      .from("shipment_items")
+      .select("shipment_id")
+      .ilike("description", `%${s}%`)
+      .limit(500);
+    if (itemMatches.error) throw itemMatches.error;
+    const itemIds = [
+      ...new Set((itemMatches.data || []).map((row) => row.shipment_id)),
+    ];
+    const itemFilter = itemIds.length ? `,id.in.(${itemIds.join(",")})` : "";
     q = q.or(
-      `shipment_no.ilike.%${s}%,sender_snapshot->>display_name.ilike.%${s}%,receiver_snapshot->>display_name.ilike.%${s}%`,
+      `shipment_no.ilike.%${s}%,sender_snapshot->>display_name.ilike.%${s}%,receiver_snapshot->>display_name.ilike.%${s}%,sender_snapshot->>phone.ilike.%${s}%,receiver_snapshot->>phone.ilike.%${s}%${itemFilter}`,
     );
   }
   if (options.zone) q = q.eq("zone_id", options.zone);
@@ -103,6 +123,29 @@ export async function listShipments(
   const page = options.page || 0;
   const r = await q.range(page * 50, page * 50 + 49);
   return { rows: check(r) as Shipment[], count: r.count || 0 };
+}
+export async function getLoadingQueue(): Promise<LoadingQueueRecord[]> {
+  const rows: LoadingQueueRecord[] = [];
+  let page = 0;
+  while (page < 20) {
+    const result = await supabase
+      .from("shipments")
+      .select(
+        "id,shipment_no,received_at,sender_snapshot,receiver_snapshot,zone_id,district_id,total_amount,total_quantity,shipment_status,shipment_items(id,product_id,description,quantity,unit,unit_price,weight,fragile)",
+      )
+      .eq("shipment_status", "RECEIVED")
+      .order("received_at", { ascending: true })
+      .range(page * 500, page * 500 + 499);
+    if (result.error) throw result.error;
+    const batch = (result.data || []).map((row) => ({
+      ...row,
+      items: row.shipment_items || [],
+    })) as unknown as LoadingQueueRecord[];
+    rows.push(...batch);
+    if (batch.length < 500) break;
+    page += 1;
+  }
+  return rows;
 }
 export async function getShipment(id: string): Promise<ShipmentDetail> {
   const [s, i, f] = await Promise.all([
@@ -198,4 +241,39 @@ export async function photoBlob(id: string) {
   });
   if (!r.ok) throw new Error("เปิดรูปไม่สำเร็จ");
   return r.blob();
+}
+
+export async function uploadMasterDocument(
+  ownerType: "EMPLOYEE" | "VEHICLE",
+  ownerId: string,
+  kind: string,
+  expiresOn: string,
+  file: File,
+) {
+  const session = (await supabase.auth.getSession()).data.session;
+  if (!session) throw new Error("กรุณาเข้าสู่ระบบอีกครั้ง");
+  const params = new URLSearchParams({ ownerType, owner: ownerId, kind });
+  if (expiresOn) params.set("expires", expiresOn);
+  const response = await fetch("/api/master-documents?" + params, {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + session.access_token,
+      "Content-Type": file.type,
+      "X-Filename": encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "อัปโหลดเอกสารไม่สำเร็จ");
+  return result as { id: string; filename: string };
+}
+
+export async function masterDocumentBlob(id: string) {
+  const session = (await supabase.auth.getSession()).data.session;
+  if (!session) throw new Error("กรุณาเข้าสู่ระบบอีกครั้ง");
+  const response = await fetch("/api/master-documents/" + id, {
+    headers: { Authorization: "Bearer " + session.access_token },
+  });
+  if (!response.ok) throw new Error("เปิดเอกสารไม่สำเร็จ");
+  return response.blob();
 }

@@ -18,14 +18,13 @@ import {
   Save,
   Printer,
   Eye,
-  FlaskConical,
   FileText,
   Check,
   ChevronDown,
   CircleAlert,
 } from "lucide-react";
 import { useWorkspace } from "./context";
-import { Button, Field, IconButton } from "./ui";
+import { Button, EditableSelect, Field, IconButton } from "./ui";
 import {
   emptyItem,
   emptyShipment,
@@ -37,7 +36,7 @@ import {
   thaiTime,
   totals,
 } from "./domain";
-import { demoParties, demoRate } from "./demo";
+import { demoRate } from "./demo";
 import type {
   DashboardStats,
   Item,
@@ -249,29 +248,6 @@ export default function Intake() {
       })),
     }));
   }
-  function sample() {
-    const z = w.zones.find((z) => z.code === "STI") || w.zones[0],
-      p = w.products[0];
-    const item = {
-      ...emptyItem(),
-      product_id: p.id,
-      description: p.name,
-      unit: p.unit,
-      quantity: 6,
-      unit_price:
-        demoRate(w.rules, { ...emptyItem(), product_id: p.id }, z.id) ?? 40,
-    };
-    patch({
-      ...emptyShipment(),
-      sender: { ...demoParties[0] },
-      receiver: { ...demoParties[3] },
-      zone_id: z.id,
-      district_id: z.districts[0].id,
-      items: [item],
-      collect_now: true,
-      price_reason: "ราคาตัวอย่าง",
-    });
-  }
   function previewDraft() {
     if (!zone) {
       w.toast("กรุณาเลือกจังหวัดปลายทาง", true);
@@ -383,12 +359,6 @@ export default function Intake() {
           <p>สำนักงานใหญ่ กรุงเทพฯ</p>
         </div>
         <div className="heading-actions">
-          {w.demo && (
-            <Button onClick={sample}>
-              <FlaskConical size={16} />
-              ใส่ข้อมูลตัวอย่าง
-            </Button>
-          )}
           <Button onClick={() => setResetConfirm(true)}>
             <Plus size={17} />
             เริ่มบิลใหม่
@@ -640,26 +610,25 @@ export default function Intake() {
                           />
                         </td>
                         <td>
-                          <select
-                            aria-label={"หน่วย " + (n + 1)}
+                          <EditableSelect
+                            ariaLabel={"หน่วย " + (n + 1)}
                             value={item.unit}
-                            onChange={(e) =>
-                              patchItem(item.id, { unit: e.target.value })
-                            }
-                          >
-                            {[
-                              "กล่อง",
-                              "ลัง",
-                              "มัด",
-                              "กระสอบ",
-                              "พาเลท",
-                              "ชิ้น",
-                              "ถุง",
-                              "กก.",
-                            ].map((u) => (
-                              <option key={u}>{u}</option>
-                            ))}
-                          </select>
+                            options={[
+                              ...new Set([
+                                "กล่อง",
+                                "ลัง",
+                                "มัด",
+                                "กระสอบ",
+                                "พาเลท",
+                                "ชิ้น",
+                                "ถุง",
+                                "กก.",
+                                ...w.products.map((product) => product.unit),
+                              ]),
+                            ]}
+                            onChange={(unit) => patchItem(item.id, { unit })}
+                            customLabel="เพิ่ม / แก้ไขหน่วยนับ"
+                          />
                         </td>
                         <td>
                           <input
@@ -798,18 +767,21 @@ export default function Intake() {
                 </div>
                 {form.payment_mode.startsWith("CREDIT") && (
                   <Field label="เครดิตเทอม">
-                    <select
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      list="credit-day-options"
                       value={form.credit_days}
                       onChange={(e) =>
                         patch({ credit_days: Number(e.target.value) })
                       }
-                    >
+                    />
+                    <datalist id="credit-day-options">
                       {[7, 15, 30, 45, 60].map((n) => (
-                        <option key={n} value={n}>
-                          {n} วัน
-                        </option>
+                        <option key={n} value={n} label={`${n} วัน`} />
                       ))}
-                    </select>
+                    </datalist>
                   </Field>
                 )}
                 <div className="payer-line">
