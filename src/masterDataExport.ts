@@ -788,7 +788,13 @@ export async function createMasterDataWorkbook(bundle: MasterDataExportBundle) {
       { header: "จำนวน", key: "quantity", width: 12, numberFormat: "#,##0.00" },
       {
         header: "ราคาเสนอ/หน่วย",
-        key: "collectedPrice",
+        key: "proposedPrice",
+        width: 20,
+        numberFormat: "#,##0.00",
+      },
+      {
+        header: "ราคาที่อนุมัติ/หน่วย",
+        key: "approvedPrice",
         width: 20,
         numberFormat: "#,##0.00",
       },
@@ -802,7 +808,8 @@ export async function createMasterDataWorkbook(bundle: MasterDataExportBundle) {
       { header: "ผลการอนุมัติ", key: "resolutionType", width: 18 },
       { header: "วันที่ขอ", key: "requestedAt", width: 24 },
       { header: "วันที่จบ", key: "resolvedAt", width: 24 },
-      { header: "หมายเหตุ", key: "note", width: 36 },
+      { header: "หมายเหตุผู้เสนอ", key: "note", width: 36 },
+      { header: "หมายเหตุผู้อนุมัติ", key: "approvalNote", width: 36 },
     ],
     bundle.data.priceRequests.map((row) => ({
       id: row.id,
@@ -814,13 +821,15 @@ export async function createMasterDataWorkbook(bundle: MasterDataExportBundle) {
       branch: branchName(row.branch),
       payment: PAYMENT_LABELS[row.payment],
       quantity: row.quantity,
-      collectedPrice: row.collectedPrice,
+      proposedPrice: row.proposedPrice,
+      approvedPrice: row.approvedPrice,
       actualCollectedAmount: row.actualCollectedAmount,
       status: row.status,
       resolutionType: row.resolutionType || "",
       requestedAt: row.requestedAt,
       resolvedAt: row.resolvedAt || "",
       note: row.note,
+      approvalNote: row.approvalNote || "",
     })),
   );
 

@@ -48,6 +48,7 @@ type Line = Measurements & {
   requestPrice: boolean;
 };
 type Draft = {
+  openedByEmployeeId: string;
   receiverId: string;
   senderId: string;
   branch: string;
@@ -67,6 +68,7 @@ type Bill = {
   id: string;
   number: string;
   date: string;
+  openedBy?: { employeeId: string; code: string; name: string };
   draft: Draft;
   receiver: IntakeParty;
   sender: IntakeParty;
@@ -97,7 +99,8 @@ const blankLine = (): Line => ({
   price: null,
   requestPrice: false,
 });
-const blank = (): Draft => ({
+const blank = (openedByEmployeeId = ""): Draft => ({
+  openedByEmployeeId,
   receiverId: "",
   senderId: "",
   branch: "",
@@ -163,6 +166,7 @@ function load(): State {
           ),
         drafts: {
           ...stored.drafts,
+          openedByEmployeeId: stored.drafts.openedByEmployeeId || "",
           billingCycle: stored.drafts.billingCycle || "MONTH_END",
           withholding: stored.version === 4 ? false : stored.drafts.withholding,
           lines: stored.drafts.lines.map((row) => ({
@@ -377,6 +381,35 @@ export default function IntakePrototype() {
   }, [operations]);
   const receiver = state.parties.find((p) => p.id === f.receiverId);
   const sender = state.parties.find((p) => p.id === f.senderId);
+  const loginEmployee = operations.employees.find(
+    (employee) =>
+      employee.active &&
+      (employee.id === w.profile.id ||
+        normalized(employee.name) === normalized(w.profile.display_name)),
+  );
+  const loginOpener = {
+    id: loginEmployee?.id || w.profile.id,
+    code: loginEmployee?.code || "บัญชีผู้ใช้",
+    name: w.profile.display_name,
+  };
+  const openerChoices = [
+    loginOpener,
+    ...operations.employees.filter(
+      (employee) => employee.active && employee.id !== loginOpener.id,
+    ),
+  ].sort((a, b) => a.name.localeCompare(b.name, "th"));
+  const opener = openerChoices.find(
+    (employee) => employee.id === f.openedByEmployeeId,
+  );
+  useEffect(() => {
+    setState((current) => ({
+      ...current,
+      drafts: {
+        ...current.drafts,
+        openedByEmployeeId: loginOpener.id,
+      },
+    }));
+  }, [loginOpener.id]);
   const branch = BRANCH_OPTIONS.find((b) => b.code === f.branch);
   const before = intakeAmounts(f.lines, f.discount, 0, false);
   const withheld = f.withholding
@@ -455,7 +488,7 @@ export default function IntakePrototype() {
   }
   function selectReceiver(id: string) {
     const next = {
-      ...blank(),
+      ...blank(f.openedByEmployeeId),
       receiverId: id,
       branch: BRANCH_OPTIONS.some((b) => b.code === state.defaults[id])
         ? state.defaults[id]
@@ -561,6 +594,12 @@ export default function IntakePrototype() {
     setAdding({ kind, query });
   }
   function buildBill(issue: boolean) {
+    if (!opener) {
+      setError(
+        "กรุณาเลือกผู้เปิดบิล หากไม่มีรายชื่อให้เพิ่มที่ข้อมูลหลัก > พนักงาน",
+      );
+      return;
+    }
     if (!receiver || !sender || !branch) {
       setError("กรุณาเลือกผู้รับ ผู้ส่ง และสาขาปลายทางให้ครบ");
       return;
@@ -629,6 +668,11 @@ export default function IntakePrototype() {
         ? `BKK-${String(new Date().getFullYear() + 543).slice(-2)}-${String(state.bills.length + 1).padStart(6, "0")}`
         : "ร่าง",
       date: new Date().toISOString(),
+      openedBy: {
+        employeeId: opener.id,
+        code: opener.code,
+        name: opener.name,
+      },
       shipmentStatus: "RECEIVED",
       billingPeriod:
         f.payment.startsWith("CREDIT") && f.billingCycle === "MONTH_END"
@@ -729,7 +773,8 @@ export default function IntakePrototype() {
                 branch: f.branch,
                 billNumber: bill.number,
                 quantity: row.quantity,
-                collectedPrice: null,
+                proposedPrice: null,
+                approvedPrice: null,
                 actualCollectedAmount: null,
                 status: "PENDING_PRICE",
                 requestedAt: timestamp,
@@ -742,7 +787,7 @@ export default function IntakePrototype() {
       setState((s) => ({
         ...s,
         bills: [bill, ...s.bills],
-        drafts: blank(),
+        drafts: blank(loginOpener.id),
         merchandise: {
           ...s.merchandise,
           [f.receiverId]: [
@@ -774,7 +819,27 @@ export default function IntakePrototype() {
           <h1>เปิดบิลรับสินค้า</h1>
           <span>สำนักงานใหญ่ กรุงเทพฯ · {thaiDate(new Date())}</span>
         </div>
-        <div>
+        <div className="desk-heading-actions">
+          <Field label="ผู้เปิดบิล" required>
+            <select
+              aria-label="ผู้เปิดบิล"
+              value={f.openedByEmployeeId}
+              onChange={(event) =>
+                patch({ openedByEmployeeId: event.target.value })
+              }
+            >
+              <option value="">
+                {openerChoices.length
+                  ? "เลือกผู้เปิดบิล"
+                  : "ยังไม่มีรายชื่อพนักงาน"}
+              </option>
+              {openerChoices.map((employee) => (
+                <option key={employee.id} value={employee.id}>
+                  {employee.name} · {employee.code}
+                </option>
+              ))}
+            </select>
+          </Field>
           <Button onClick={() => setReset(true)}>
             <Plus size={16} />
             บิลใหม่
@@ -1344,7 +1409,7 @@ export default function IntakePrototype() {
             <Button
               className="primary"
               onClick={() => {
-                patch(blank());
+                patch(blank(loginOpener.id));
                 setReset(false);
                 setError("");
                 setSenderGlobal(false);
@@ -1384,6 +1449,10 @@ function BillPreview({
           <b>{b.number}</b>
         </header>
         <p>เอกสารตัวอย่าง · {thaiDate(b.date)}</p>
+        <p>
+          ผู้เปิดบิล: {b.openedBy?.name || "ไม่พบข้อมูล"}
+          {b.openedBy?.code ? ` (${b.openedBy.code})` : ""}
+        </p>
         <p>
           กรุงเทพฯ →{" "}
           {

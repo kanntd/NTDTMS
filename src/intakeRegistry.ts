@@ -61,6 +61,7 @@ export function saveIntakeRegistry(snapshot: IntakeRegistrySnapshot) {
   const merchandise = {};
   const relations = {};
   const draft = {
+    openedByEmployeeId: "",
     receiverId: "",
     senderId: "",
     branch: "",

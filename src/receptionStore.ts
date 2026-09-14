@@ -29,6 +29,7 @@ export type StoredReceptionBill = {
   id: string;
   number: string;
   date: string;
+  openedBy?: { employeeId: string; code: string; name: string };
   shipmentStatus?: "RECEIVED" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED";
   load?: ReceptionLoadRecord;
   draft: {
@@ -142,7 +143,7 @@ export function receptionBillToShipment(
     price_reason: bill.draft.reason || "",
     invoice_id: `local-${bill.id}`,
     due_date: bill.billingPeriod?.end || localDate(new Date(bill.date)),
-    created_by: "demo",
+    created_by: bill.openedBy?.employeeId || "demo",
     items: bill.items.map((item) => ({
       id: item.id,
       product_id: item.catalogId,

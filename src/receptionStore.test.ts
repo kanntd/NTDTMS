@@ -25,6 +25,11 @@ const bill: StoredReceptionBill = {
   id: "bill-1",
   number: "BKK-69-000001",
   date: "2026-09-12T03:00:00.000Z",
+  openedBy: {
+    employeeId: "employee-1",
+    code: "EMP-001",
+    name: "สมหญิง รับสินค้า",
+  },
   draft: {
     branch: "SWL",
     payment: "CREDIT_DESTINATION",
@@ -91,6 +96,7 @@ describe("reception bill storage bridge", () => {
       total_amount: 380,
       discount: 20,
       shipment_status: "RECEIVED",
+      created_by: "employee-1",
     });
     expect(shipment.items[0]).toMatchObject({
       description: "รองเท้า",

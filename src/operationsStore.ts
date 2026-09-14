@@ -70,7 +70,8 @@ export interface PriceRequest {
   branch: string;
   billNumber: string;
   quantity: number;
-  collectedPrice: number | null;
+  proposedPrice: number | null;
+  approvedPrice: number | null;
   actualCollectedAmount: number | null;
   status:
     | "PENDING_PRICE"
@@ -88,14 +89,22 @@ export interface PriceRequest {
   resolvedAt?: string;
   resolvedBy?: string;
   note: string;
+  approvalNote?: string;
 }
 
 type LegacyPriceRequest = Omit<
   PriceRequest,
-  "status" | "quantity" | "actualCollectedAmount"
+  | "status"
+  | "quantity"
+  | "proposedPrice"
+  | "approvedPrice"
+  | "actualCollectedAmount"
 > & {
   status: PriceRequest["status"] | "PENDING";
   quantity?: number;
+  proposedPrice?: number | null;
+  approvedPrice?: number | null;
+  collectedPrice?: number | null;
   actualCollectedAmount?: number | null;
 };
 
@@ -343,17 +352,26 @@ export function loadOperations(): OperationsState {
         receiverProducts,
         relationProducts,
         priceRequests: (value.priceRequests || []).map(
-          (row: LegacyPriceRequest) => ({
-            ...row,
-            quantity: row.quantity ?? 1,
-            actualCollectedAmount: row.actualCollectedAmount ?? null,
-            status:
+          (row: LegacyPriceRequest) => {
+            const proposedPrice =
+              row.proposedPrice ?? row.collectedPrice ?? null;
+            const status =
               row.status === "PENDING"
-                ? row.collectedPrice === null
+                ? proposedPrice === null
                   ? "PENDING_PRICE"
                   : "PENDING_APPROVAL"
-                : row.status,
-          }),
+                : row.status;
+            return {
+              ...row,
+              quantity: row.quantity ?? 1,
+              proposedPrice,
+              approvedPrice:
+                row.approvedPrice ??
+                (status === "RESOLVED" ? proposedPrice : null),
+              actualCollectedAmount: row.actualCollectedAmount ?? null,
+              status,
+            };
+          },
         ),
         employees: value.employees || [],
         vehicles: (value.vehicles || []).map((row: Vehicle) => ({

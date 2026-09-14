@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
   Calculator,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   History,
   Pencil,
@@ -34,24 +35,107 @@ import { PAYMENT_LABELS, type PaymentMode } from "./types";
 import { Button, Empty, Field, IconButton, Modal } from "./ui";
 
 type Tab = "current" | "pending" | "history" | "batch";
+type PriceFilters = {
+  query: string;
+  receiverId: string;
+  senderId: string;
+  catalogId: string;
+  payment: PaymentMode | "";
+  branch: string;
+};
+type FilterOption = { id: string; label: string; detail?: string };
+type PriceDimensions = {
+  receiverId: string;
+  senderId: string;
+  catalogId: string;
+  payment: PaymentMode;
+  branch: string;
+};
+type LocalPriceLine = {
+  catalogId: string;
+  quantity: number;
+  price: number | null;
+  requestPrice: boolean;
+};
+type LocalPriceBill = {
+  number: string;
+  date: string;
+  draft: Omit<PriceDimensions, "catalogId"> & {
+    lines: LocalPriceLine[];
+    discount?: number;
+    withholding?: boolean;
+    taxOverride?: number | null;
+    roundCash?: boolean;
+  };
+  items: LocalPriceLine[];
+  withheld?: number;
+  amounts: ReturnType<typeof intakeAmounts>;
+};
+type PriceFollowUp = {
+  billNumber: string;
+  requestedAt: string;
+  quantity: number;
+};
+
+const emptyFilters: PriceFilters = {
+  query: "",
+  receiverId: "",
+  senderId: "",
+  catalogId: "",
+  payment: "",
+  branch: "",
+};
+
+export function matchesPriceFilters(
+  filters: PriceFilters,
+  row: PriceDimensions,
+) {
+  return (
+    (!filters.receiverId || row.receiverId === filters.receiverId) &&
+    (!filters.senderId || row.senderId === filters.senderId) &&
+    (!filters.catalogId || row.catalogId === filters.catalogId) &&
+    (!filters.payment || row.payment === filters.payment) &&
+    (!filters.branch || row.branch === filters.branch)
+  );
+}
+
+export function isWithinPriceHistoryRange(
+  createdAt: string,
+  from: string,
+  to: string,
+) {
+  const date = createdAt.slice(0, 10);
+  return (!from || date >= from) && (!to || date <= to);
+}
 
 const branchLabel = (code: string) =>
   BRANCH_OPTIONS.find((row) => row.code === code)?.name || code;
 const requestStatusLabel: Record<PriceRequest["status"], string> = {
-  PENDING_PRICE: "รอปลายทางใส่ราคา",
+  PENDING_PRICE: "รอข้อมูลราคา",
   PENDING_APPROVAL: "รอบัญชียืนยัน",
   RETURNED: "ส่งกลับแก้ไข",
   RESOLVED: "ยืนยันแล้ว",
   CANCELLED: "ยกเลิกแล้ว",
 };
 
-function applyResolvedPriceToLocalBills(request: PriceRequest, price: number) {
+export function applyResolvedPriceToLocalBills(
+  request: PriceRequest,
+  price: number,
+  resolutionType: "STANDARD" | "BILL_ONLY",
+): PriceFollowUp | null {
   try {
     const storageKey = INTAKE_STORAGE_KEY;
     const stored = JSON.parse(localStorage.getItem(storageKey) || "null");
-    if (!Array.isArray(stored?.bills)) return;
-    for (const bill of stored.bills) {
+    if (!Array.isArray(stored?.bills)) return null;
+    const bills = stored.bills as LocalPriceBill[];
+    for (const bill of bills) {
       const draft = bill.draft;
+      const isSourceBill = bill.number === request.billNumber;
+      const isLaterPendingBill =
+        resolutionType === "STANDARD" &&
+        typeof bill.date === "string" &&
+        bill.date >= request.requestedAt;
+      if (!isSourceBill && !isLaterPendingBill) continue;
       if (
         draft?.receiverId !== request.receiverId ||
         draft?.senderId !== request.senderId ||
@@ -98,8 +182,39 @@ function applyResolvedPriceToLocalBills(request: PriceRequest, price: number) {
       );
     }
     localStorage.setItem(storageKey, JSON.stringify(stored));
+    if (resolutionType === "BILL_ONLY") {
+      const nextBill = bills
+        .filter(
+          (bill) =>
+            bill.number !== request.billNumber &&
+            bill.date >= request.requestedAt &&
+            bill.draft.receiverId === request.receiverId &&
+            bill.draft.senderId === request.senderId &&
+            bill.draft.payment === request.payment &&
+            bill.draft.branch === request.branch &&
+            bill.items.some(
+              (item) =>
+                item.catalogId === request.catalogId &&
+                (item.requestPrice || item.price === null),
+            ),
+        )
+        .sort((a, b) => a.date.localeCompare(b.date))[0];
+      const pendingItem = nextBill?.items.find(
+        (item) =>
+          item.catalogId === request.catalogId &&
+          (item.requestPrice || item.price === null),
+      );
+      if (nextBill && pendingItem)
+        return {
+          billNumber: nextBill.number,
+          requestedAt: nextBill.date,
+          quantity: Number(pendingItem.quantity) || 1,
+        };
+    }
+    return null;
   } catch {
     /* Production persists this transition in one database transaction. */
+    return null;
   }
 }
 
@@ -108,7 +223,13 @@ export default function Pricing() {
   const registry = useMemo(loadIntakeRegistry, []);
   const [operations, setOperations] = useState(loadOperations);
   const [tab, setTab] = useState<Tab>("current");
-  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState<PriceFilters>(emptyFilters);
+  const [pendingStatus, setPendingStatus] = useState<
+    PriceRequest["status"] | ""
+  >("");
+  const [historyFrom, setHistoryFrom] = useState("");
+  const [historyTo, setHistoryTo] = useState("");
+  const [historyApprover, setHistoryApprover] = useState("");
   const [editing, setEditing] = useState<PriceAgreement | null>(null);
   const [resolving, setResolving] = useState<PriceRequest | null>(null);
 
@@ -118,25 +239,68 @@ export default function Pricing() {
     w.toast(message);
   }
 
-  const normalized = query.trim().toLocaleLowerCase("th");
+  const dimensions = [...operations.agreements, ...operations.priceRequests];
+  const receiverOptions = [...new Set(dimensions.map((row) => row.receiverId))]
+    .map((id) => ({ id, label: partyName(registry.parties, id) }))
+    .sort((a, b) => a.label.localeCompare(b.label, "th"));
+  const senderOptions = [
+    ...new Set(
+      dimensions
+        .filter(
+          (row) => !filters.receiverId || row.receiverId === filters.receiverId,
+        )
+        .map((row) => row.senderId),
+    ),
+  ]
+    .map((id) => ({ id, label: partyName(registry.parties, id) }))
+    .sort((a, b) => a.label.localeCompare(b.label, "th"));
+  const productOptions = [
+    ...new Set(
+      dimensions
+        .filter(
+          (row) =>
+            (!filters.receiverId || row.receiverId === filters.receiverId) &&
+            (!filters.senderId || row.senderId === filters.senderId),
+        )
+        .map((row) => row.catalogId),
+    ),
+  ]
+    .map((id) => ({ id, label: catalogName(registry.catalog, id) }))
+    .sort((a, b) => a.label.localeCompare(b.label, "th"));
+  const approverOptions = [
+    ...new Set(operations.priceVersions.map((row) => row.approvedBy)),
+  ]
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, "th"));
+  const normalized = filters.query.trim().toLocaleLowerCase("th");
+  const matchesDimensions = (row: PriceDimensions) =>
+    matchesPriceFilters(filters, row);
   const currentRows = operations.agreements
     .filter((row) => row.active && row.currentVersionId)
-    .filter((row) =>
-      [
+    .filter(matchesDimensions)
+    .filter((row) => {
+      const version = operations.priceVersions.find(
+        (item) => item.id === row.currentVersionId,
+      );
+      return [
         partyName(registry.parties, row.receiverId),
         partyName(registry.parties, row.senderId),
         catalogName(registry.catalog, row.catalogId),
         PAYMENT_LABELS[row.payment],
         branchLabel(row.branch),
+        version?.reason || "",
+        version?.approvedBy || "",
       ]
         .join(" ")
         .toLocaleLowerCase("th")
-        .includes(normalized),
-    );
+        .includes(normalized);
+    });
   const pendingRows = operations.priceRequests
     .filter((row) => row.status !== "RESOLVED" && row.status !== "CANCELLED")
+    .filter(matchesDimensions)
+    .filter((row) => !pendingStatus || row.status === pendingStatus)
     .filter((row) =>
-      `${partyName(registry.parties, row.receiverId)} ${partyName(registry.parties, row.senderId)} ${catalogName(registry.catalog, row.catalogId)} ${row.billNumber}`
+      `${partyName(registry.parties, row.receiverId)} ${partyName(registry.parties, row.senderId)} ${catalogName(registry.catalog, row.catalogId)} ${row.billNumber} ${PAYMENT_LABELS[row.payment]} ${branchLabel(row.branch)} ${requestStatusLabel[row.status]} ${row.note}`
         .toLocaleLowerCase("th")
         .includes(normalized),
     );
@@ -147,9 +311,16 @@ export default function Pricing() {
         (row) => row.id === version.agreementId,
       );
       return agreement
-        ? `${partyName(registry.parties, agreement.receiverId)} ${partyName(registry.parties, agreement.senderId)} ${catalogName(registry.catalog, agreement.catalogId)} ${version.reason}`
-            .toLocaleLowerCase("th")
-            .includes(normalized)
+        ? matchesDimensions(agreement) &&
+            isWithinPriceHistoryRange(
+              version.createdAt,
+              historyFrom,
+              historyTo,
+            ) &&
+            (!historyApprover || version.approvedBy === historyApprover) &&
+            `${partyName(registry.parties, agreement.receiverId)} ${partyName(registry.parties, agreement.senderId)} ${catalogName(registry.catalog, agreement.catalogId)} ${PAYMENT_LABELS[agreement.payment]} ${branchLabel(agreement.branch)} ${version.reason} ${version.approvedBy}`
+              .toLocaleLowerCase("th")
+              .includes(normalized)
         : false;
     });
   const waitingForPrice = pendingRows.filter(
@@ -158,6 +329,29 @@ export default function Pricing() {
   const waitingForApproval = pendingRows.filter(
     (row) => row.status === "PENDING_APPROVAL",
   ).length;
+  const filteredCount =
+    tab === "current"
+      ? currentRows.length
+      : tab === "pending"
+        ? pendingRows.length
+        : tab === "history"
+          ? historyRows.length
+          : currentRows.length;
+  const hasScopeFilter = Boolean(
+    filters.query ||
+    filters.receiverId ||
+    filters.senderId ||
+    filters.catalogId ||
+    filters.payment ||
+    filters.branch,
+  );
+  function clearFilters() {
+    setFilters(emptyFilters);
+    setPendingStatus("");
+    setHistoryFrom("");
+    setHistoryTo("");
+    setHistoryApprover("");
+  }
 
   return (
     <div className="ops-page pricing-page">
@@ -218,20 +412,25 @@ export default function Pricing() {
         </button>
       </div>
 
-      {tab !== "batch" && (
-        <div className="ops-toolbar">
-          <label>
-            <Search size={16} />
-            <input
-              aria-label="ค้นหาราคา"
-              placeholder="ค้นหาลูกค้า สินค้า เลขบิล หรือเหตุผล"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </label>
-          <span>การแก้ราคาจะสร้างเวอร์ชันใหม่เสมอ บิลเก่าไม่เปลี่ยน</span>
-        </div>
-      )}
+      <PriceFilterBar
+        tab={tab}
+        filters={filters}
+        receiverOptions={receiverOptions}
+        senderOptions={senderOptions}
+        productOptions={productOptions}
+        pendingStatus={pendingStatus}
+        historyFrom={historyFrom}
+        historyTo={historyTo}
+        historyApprover={historyApprover}
+        approverOptions={approverOptions}
+        resultCount={filteredCount}
+        onFilters={setFilters}
+        onPendingStatus={setPendingStatus}
+        onHistoryFrom={setHistoryFrom}
+        onHistoryTo={setHistoryTo}
+        onHistoryApprover={setHistoryApprover}
+        onClear={clearFilters}
+      />
 
       {tab === "current" && (
         <CurrentPrices
@@ -257,6 +456,8 @@ export default function Pricing() {
       )}
       {tab === "batch" && (
         <BatchAdjustment
+          rows={currentRows}
+          hasScopeFilter={hasScopeFilter}
           operations={operations}
           registry={registry}
           onApply={(next, count) =>
@@ -294,31 +495,63 @@ export default function Pricing() {
         <ResolvePrice
           request={resolving}
           onClose={() => setResolving(null)}
-          onSave={(price, actualCollectedAmount, decision, reason) => {
+          onSave={(
+            proposedPrice,
+            approvedPrice,
+            actualCollectedAmount,
+            decision,
+            note,
+          ) => {
             const next = structuredClone(operations);
             const request = next.priceRequests.find(
               (row) => row.id === resolving.id,
             )!;
-            request.collectedPrice = price;
             request.actualCollectedAmount = actualCollectedAmount;
-            request.note = reason;
             const timestamp = new Date().toISOString();
             if (decision === "SUBMIT") {
+              request.proposedPrice = proposedPrice;
+              request.note = note;
               request.status = "PENDING_APPROVAL";
               request.submittedAt = timestamp;
-              request.submittedBy = "พนักงานปลายทาง";
+              request.submittedBy = "ผู้ให้ข้อมูลราคา";
               request.returnReason = undefined;
             } else if (decision === "RETURN") {
               request.status = "RETURNED";
               request.returnedAt = timestamp;
               request.returnedBy = "ผู้ดูแล NTD";
-              request.returnReason = reason;
+              request.returnReason = note;
             } else {
+              const finalPrice = approvedPrice!;
+              request.approvedPrice = finalPrice;
+              request.approvalNote = note;
               request.status = "RESOLVED";
               request.resolutionType = decision;
               request.resolvedAt = timestamp;
               request.resolvedBy = "ผู้ดูแล NTD";
-              applyResolvedPriceToLocalBills(request, price);
+              const nextPendingBill = applyResolvedPriceToLocalBills(
+                request,
+                finalPrice,
+                decision,
+              );
+              if (decision === "BILL_ONLY" && nextPendingBill) {
+                next.priceRequests.push({
+                  id: crypto.randomUUID(),
+                  key: request.key,
+                  receiverId: request.receiverId,
+                  senderId: request.senderId,
+                  catalogId: request.catalogId,
+                  payment: request.payment,
+                  branch: request.branch,
+                  billNumber: nextPendingBill.billNumber,
+                  quantity: nextPendingBill.quantity,
+                  proposedPrice: null,
+                  approvedPrice: null,
+                  actualCollectedAmount: null,
+                  status: "PENDING_PRICE",
+                  requestedAt: nextPendingBill.requestedAt,
+                  note: "รอข้อมูลราคา หลังคำขอก่อนหน้าอนุมัติเฉพาะบิล",
+                });
+              }
             }
             if (decision === "STANDARD")
               addPriceVersion(next, {
@@ -327,8 +560,10 @@ export default function Pricing() {
                 catalogId: request.catalogId,
                 payment: request.payment,
                 branch: request.branch,
-                price,
-                reason,
+                price: approvedPrice!,
+                reason:
+                  note.trim() || `อนุมัติจากคำขอราคา ${request.billNumber}`,
+                effectiveFrom: request.requestedAt.slice(0, 10),
                 source: "PRICE_REQUEST",
               });
             commit(
@@ -344,6 +579,295 @@ export default function Pricing() {
             setResolving(null);
           }}
         />
+      )}
+    </div>
+  );
+}
+
+function PriceFilterBar({
+  tab,
+  filters,
+  receiverOptions,
+  senderOptions,
+  productOptions,
+  pendingStatus,
+  historyFrom,
+  historyTo,
+  historyApprover,
+  approverOptions,
+  resultCount,
+  onFilters,
+  onPendingStatus,
+  onHistoryFrom,
+  onHistoryTo,
+  onHistoryApprover,
+  onClear,
+}: {
+  tab: Tab;
+  filters: PriceFilters;
+  receiverOptions: FilterOption[];
+  senderOptions: FilterOption[];
+  productOptions: FilterOption[];
+  pendingStatus: PriceRequest["status"] | "";
+  historyFrom: string;
+  historyTo: string;
+  historyApprover: string;
+  approverOptions: string[];
+  resultCount: number;
+  onFilters: (filters: PriceFilters) => void;
+  onPendingStatus: (status: PriceRequest["status"] | "") => void;
+  onHistoryFrom: (date: string) => void;
+  onHistoryTo: (date: string) => void;
+  onHistoryApprover: (name: string) => void;
+  onClear: () => void;
+}) {
+  const patch = (next: Partial<PriceFilters>) =>
+    onFilters({ ...filters, ...next });
+  const hasAnyFilter = Boolean(
+    filters.query ||
+    filters.receiverId ||
+    filters.senderId ||
+    filters.catalogId ||
+    filters.payment ||
+    filters.branch ||
+    pendingStatus ||
+    historyFrom ||
+    historyTo ||
+    historyApprover,
+  );
+  return (
+    <section className="pricing-filters" aria-label="ตัวกรองราคา">
+      <div className="pricing-filter-topline">
+        <label className="pricing-keyword">
+          <Search size={16} />
+          <input
+            aria-label="ค้นหาราคา"
+            placeholder="ค้นหาลูกค้า สินค้า เลขบิล หรือเหตุผล"
+            value={filters.query}
+            onChange={(event) => patch({ query: event.target.value })}
+          />
+        </label>
+        <div className="pricing-filter-summary">
+          <strong>พบ {resultCount} รายการ</strong>
+          <Button type="button" disabled={!hasAnyFilter} onClick={onClear}>
+            <RotateCcw size={15} />
+            ล้างตัวกรอง
+          </Button>
+        </div>
+      </div>
+      <div className="pricing-filter-grid">
+        <FilterPicker
+          label="ผู้รับ"
+          emptyLabel="ผู้รับทั้งหมด"
+          value={filters.receiverId}
+          options={receiverOptions}
+          onChange={(receiverId) =>
+            patch({ receiverId, senderId: "", catalogId: "" })
+          }
+        />
+        <FilterPicker
+          label="ผู้ส่ง"
+          emptyLabel="ผู้ส่งทั้งหมด"
+          value={filters.senderId}
+          options={senderOptions}
+          onChange={(senderId) => patch({ senderId, catalogId: "" })}
+        />
+        <FilterSelect
+          label="สินค้า / หน่วย"
+          value={filters.catalogId}
+          emptyLabel="สินค้าทั้งหมด"
+          options={productOptions}
+          onChange={(catalogId) => patch({ catalogId })}
+        />
+        <FilterSelect
+          label="ประเภทการชำระเงิน"
+          value={filters.payment}
+          emptyLabel="ทุกประเภท"
+          options={Object.entries(PAYMENT_LABELS).map(([id, label]) => ({
+            id,
+            label,
+          }))}
+          onChange={(payment) =>
+            patch({ payment: payment as PaymentMode | "" })
+          }
+        />
+        <FilterSelect
+          label="สาขาปลายทาง"
+          value={filters.branch}
+          emptyLabel="ทุกสาขา"
+          options={BRANCH_OPTIONS.map((row) => ({
+            id: row.code,
+            label: row.name,
+          }))}
+          onChange={(branch) => patch({ branch })}
+        />
+        {tab === "pending" && (
+          <FilterSelect
+            label="สถานะคำขอ"
+            value={pendingStatus}
+            emptyLabel="ทุกสถานะ"
+            options={[
+              { id: "PENDING_PRICE", label: requestStatusLabel.PENDING_PRICE },
+              {
+                id: "PENDING_APPROVAL",
+                label: requestStatusLabel.PENDING_APPROVAL,
+              },
+              { id: "RETURNED", label: requestStatusLabel.RETURNED },
+            ]}
+            onChange={(status) =>
+              onPendingStatus(status as PriceRequest["status"] | "")
+            }
+          />
+        )}
+        {tab === "history" && (
+          <>
+            <label className="pricing-filter-control">
+              <span>ตั้งแต่วันที่</span>
+              <input
+                type="date"
+                value={historyFrom}
+                onChange={(event) => onHistoryFrom(event.target.value)}
+              />
+            </label>
+            <label className="pricing-filter-control">
+              <span>ถึงวันที่</span>
+              <input
+                type="date"
+                min={historyFrom || undefined}
+                value={historyTo}
+                onChange={(event) => onHistoryTo(event.target.value)}
+              />
+            </label>
+            <FilterSelect
+              label="ผู้อนุมัติราคา"
+              value={historyApprover}
+              emptyLabel="ทุกคน"
+              options={approverOptions.map((name) => ({
+                id: name,
+                label: name,
+              }))}
+              onChange={onHistoryApprover}
+            />
+          </>
+        )}
+      </div>
+      <p className="pricing-filter-note">
+        {tab === "batch"
+          ? "เลือกรายการด้วยตัวกรองด้านบน แล้วตรวจราคาใหม่ก่อนยืนยัน"
+          : "การแก้ราคาจะสร้างเวอร์ชันใหม่เสมอ บิลเก่าไม่เปลี่ยน"}
+      </p>
+    </section>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  emptyLabel,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  emptyLabel: string;
+  options: FilterOption[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="pricing-filter-control">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">{emptyLabel}</option>
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function FilterPicker({
+  label,
+  value,
+  emptyLabel,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  emptyLabel: string;
+  options: FilterOption[];
+  onChange: (value: string) => void;
+}) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const current = options.find((option) => option.id === value);
+  const normalizedQuery = query.trim().toLocaleLowerCase("th");
+  const visible = options.filter((option) =>
+    `${option.label} ${option.detail || ""}`
+      .toLocaleLowerCase("th")
+      .includes(normalizedQuery),
+  );
+  function choose(next: string) {
+    onChange(next);
+    setQuery("");
+    setOpen(false);
+  }
+  return (
+    <div
+      className="pricing-filter-control pricing-filter-picker"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
+      <span>{label}</span>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={`${id}-options`}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span>{current?.label || emptyLabel}</span>
+        <ChevronDown size={15} />
+      </button>
+      {open && (
+        <div className="pricing-filter-menu" id={`${id}-options`}>
+          <label>
+            <Search size={14} />
+            <input
+              autoFocus
+              aria-label={`ค้นหา${label}`}
+              value={query}
+              placeholder={`ค้นหา${label}`}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setOpen(false);
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => choose("")}
+          >
+            {emptyLabel}
+          </button>
+          {visible.map((option) => (
+            <button
+              type="button"
+              key={option.id}
+              className={option.id === value ? "selected" : ""}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => choose(option.id)}
+            >
+              {option.label}
+            </button>
+          ))}
+          {!visible.length && <p>ไม่พบรายชื่อ</p>}
+        </div>
       )}
     </div>
   );
@@ -464,9 +988,9 @@ function PendingPrices({
                 {row.returnReason && <small>{row.returnReason}</small>}
               </td>
               <td>
-                {row.collectedPrice === null
+                {row.proposedPrice === null
                   ? "ยังไม่ระบุ"
-                  : `฿ ${money(row.collectedPrice)} / หน่วย`}
+                  : `฿ ${money(row.proposedPrice)} / หน่วย`}
               </td>
               <td>
                 {row.actualCollectedAmount === null
@@ -644,15 +1168,23 @@ function ResolvePrice({
   request: PriceRequest;
   onClose: () => void;
   onSave: (
-    price: number,
+    proposedPrice: number | null,
+    approvedPrice: number | null,
     actualCollectedAmount: number | null,
     decision: "STANDARD" | "BILL_ONLY" | "SUBMIT" | "RETURN",
     reason: string,
   ) => void;
 }) {
   const awaitingApproval = request.status === "PENDING_APPROVAL";
-  const [price, setPrice] = useState(
-    request.collectedPrice === null ? "" : String(request.collectedPrice),
+  const [proposedPrice, setProposedPrice] = useState(
+    request.proposedPrice === null ? "" : String(request.proposedPrice),
+  );
+  const [approvedPrice, setApprovedPrice] = useState(
+    request.approvedPrice === null
+      ? request.proposedPrice === null
+        ? ""
+        : String(request.proposedPrice)
+      : String(request.approvedPrice),
   );
   const [actualCollectedAmount, setActualCollectedAmount] = useState(
     request.actualCollectedAmount === null
@@ -670,7 +1202,7 @@ function ResolvePrice({
           ? "บัญชียืนยันคำขอราคา"
           : request.status === "RETURNED"
             ? "แก้ราคาที่ถูกส่งกลับ"
-            : "ปลายทางระบุราคา"
+            : "ระบุข้อมูลราคา"
       }
       onClose={onClose}
     >
@@ -679,7 +1211,8 @@ function ResolvePrice({
         onSubmit={(event) => {
           event.preventDefault();
           onSave(
-            Number(price),
+            proposedPrice === "" ? null : Number(proposedPrice),
+            approvedPrice === "" ? null : Number(approvedPrice),
             actualCollectedAmount === "" ? null : Number(actualCollectedAmount),
             decision,
             reason,
@@ -699,17 +1232,43 @@ function ResolvePrice({
             บัญชีส่งกลับ: {request.returnReason}
           </div>
         )}
-        <Field label="ราคาที่ปลายทางเสนอ / หน่วย" required>
-          <input
-            autoFocus
-            required
-            type="number"
-            min="0"
-            step="0.01"
-            value={price}
-            onChange={(event) => setPrice(event.target.value)}
-          />
-        </Field>
+        {awaitingApproval ? (
+          <>
+            <div className="request-price-proposal">
+              <span>ราคาที่เสนอ</span>
+              <strong>
+                {request.proposedPrice === null
+                  ? "ไม่ได้ระบุ"
+                  : `฿ ${money(request.proposedPrice)} / หน่วย`}
+              </strong>
+            </div>
+            <Field
+              label="ราคาที่อนุมัติ / หน่วย"
+              required={decision !== "RETURN"}
+            >
+              <input
+                autoFocus
+                required={decision !== "RETURN"}
+                type="number"
+                min="0"
+                step="0.01"
+                value={approvedPrice}
+                onChange={(event) => setApprovedPrice(event.target.value)}
+              />
+            </Field>
+          </>
+        ) : (
+          <Field label="ราคาที่เสนอ / หน่วย (ไม่บังคับ)">
+            <input
+              autoFocus
+              type="number"
+              min="0"
+              step="0.01"
+              value={proposedPrice}
+              onChange={(event) => setProposedPrice(event.target.value)}
+            />
+          </Field>
+        )}
         {request.payment === "CASH_DESTINATION" && (
           <Field label="ยอดเงินที่เก็บได้จริง (ทั้งรายการ)">
             <input
@@ -766,10 +1325,14 @@ function ResolvePrice({
             ราคานี้จะถูกส่งให้บัญชียืนยันก่อนนำไปคำนวณยอดบิล
           </div>
         )}
-        <Field label="เหตุผล / หมายเหตุ" required>
+        <Field
+          label={
+            decision === "RETURN" ? "เหตุผลที่ส่งกลับ" : "หมายเหตุ (ไม่บังคับ)"
+          }
+          required={decision === "RETURN"}
+        >
           <textarea
-            required
-            minLength={3}
+            required={decision === "RETURN"}
             rows={3}
             value={reason}
             onChange={(event) => setReason(event.target.value)}
@@ -782,7 +1345,9 @@ function ResolvePrice({
           <Button type="submit" className="primary">
             <CheckCircle2 size={16} />
             {decision === "SUBMIT"
-              ? "ส่งให้บัญชียืนยัน"
+              ? proposedPrice === ""
+                ? "ส่งให้ผู้จัดการกำหนดราคา"
+                : "ส่งให้บัญชียืนยัน"
               : decision === "RETURN"
                 ? "ส่งกลับแก้ไข"
                 : "ยืนยันราคา"}
@@ -794,29 +1359,23 @@ function ResolvePrice({
 }
 
 function BatchAdjustment({
+  rows,
+  hasScopeFilter,
   operations,
   registry,
   onApply,
 }: {
+  rows: PriceAgreement[];
+  hasScopeFilter: boolean;
   operations: OperationsState;
   registry: ReturnType<typeof loadIntakeRegistry>;
   onApply: (state: OperationsState, count: number) => void;
 }) {
-  const [branch, setBranch] = useState("");
-  const [payment, setPayment] = useState<PaymentMode | "">("");
-  const [product, setProduct] = useState("");
   const [method, setMethod] = useState<"AMOUNT" | "PERCENT">("AMOUNT");
   const [direction, setDirection] = useState<"UP" | "DOWN">("UP");
   const [value, setValue] = useState(5);
   const [reason, setReason] = useState("ปรับตามต้นทุนเชื้อเพลิง");
-  const matches = operations.agreements.filter(
-    (row) =>
-      row.active &&
-      row.currentVersionId &&
-      (!branch || row.branch === branch) &&
-      (!payment || row.payment === payment) &&
-      (!product || row.catalogId === product),
-  );
+  const matches = rows;
   function adjusted(row: PriceAgreement) {
     const old = currentPrice(operations, row.key) || 0;
     const delta = method === "PERCENT" ? (old * value) / 100 : value;
@@ -848,39 +1407,9 @@ function BatchAdjustment({
         }}
       >
         <h2>เลือกเงื่อนไขที่ต้องการปรับ</h2>
-        <Field label="สาขา">
-          <select value={branch} onChange={(e) => setBranch(e.target.value)}>
-            <option value="">ทุกสาขา</option>
-            {BRANCH_OPTIONS.map((row) => (
-              <option key={row.code} value={row.code}>
-                {row.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="ประเภทการชำระเงิน">
-          <select
-            value={payment}
-            onChange={(e) => setPayment(e.target.value as PaymentMode)}
-          >
-            <option value="">ทุกประเภท</option>
-            {Object.entries(PAYMENT_LABELS).map(([id, label]) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="สินค้า / หน่วย">
-          <select value={product} onChange={(e) => setProduct(e.target.value)}>
-            <option value="">ทุกสินค้า</option>
-            {registry.catalog.map((row) => (
-              <option key={row.id} value={row.id}>
-                {row.name} · {row.unit}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <div className="batch-filter-status">
+          ตัวกรองด้านบนเลือกไว้ <strong>{matches.length}</strong> รายการ
+        </div>
         <div className="ops-form-grid">
           <Field label="วิธีปรับ">
             <select
@@ -930,9 +1459,11 @@ function BatchAdjustment({
         <Button
           className="primary full"
           type="submit"
-          disabled={!matches.length}
+          disabled={!matches.length || !hasScopeFilter}
         >
-          ยืนยันสร้างราคาใหม่ {matches.length} รายการ
+          {hasScopeFilter
+            ? `ยืนยันสร้างราคาใหม่ ${matches.length} รายการ`
+            : "เลือกตัวกรองอย่างน้อย 1 รายการ"}
         </Button>
       </form>
       <section className="batch-preview">
