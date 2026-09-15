@@ -29,7 +29,12 @@ export type StoredReceptionBill = {
   id: string;
   number: string;
   date: string;
-  openedBy?: { employeeId: string; code: string; name: string };
+  openedBy?: {
+    employeeId: string;
+    code: string;
+    name: string;
+    nickname?: string;
+  };
   shipmentStatus?: "RECEIVED" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED";
   load?: ReceptionLoadRecord;
   draft: {

@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -32,7 +32,12 @@ import {
 import { money } from "./domain";
 import { intakeAmounts, onePercent } from "./intakeMath";
 import { PAYMENT_LABELS, type PaymentMode } from "./types";
-import { Button, Empty, Field, IconButton, Modal } from "./ui";
+import { Button, Empty, Field, IconButton, Loading, Modal } from "./ui";
+import {
+  loadRemoteWorkspace,
+  resolveRemotePriceRequest,
+  syncRemoteWorkspace,
+} from "./remoteWorkspace";
 
 type Tab = "current" | "pending" | "history" | "batch";
 type PriceFilters = {
@@ -220,8 +225,9 @@ export function applyResolvedPriceToLocalBills(
 
 export default function Pricing() {
   const w = useWorkspace();
-  const registry = useMemo(loadIntakeRegistry, []);
+  const [registry, setRegistry] = useState(loadIntakeRegistry);
   const [operations, setOperations] = useState(loadOperations);
+  const [loadingRemote, setLoadingRemote] = useState(!w.demo);
   const [tab, setTab] = useState<Tab>("current");
   const [filters, setFilters] = useState<PriceFilters>(emptyFilters);
   const [pendingStatus, setPendingStatus] = useState<
@@ -233,11 +239,35 @@ export default function Pricing() {
   const [editing, setEditing] = useState<PriceAgreement | null>(null);
   const [resolving, setResolving] = useState<PriceRequest | null>(null);
 
+  useEffect(() => {
+    if (w.demo) return;
+    let active = true;
+    loadRemoteWorkspace()
+      .then((workspace) => {
+        if (!active) return;
+        setRegistry(workspace.registry);
+        setOperations(workspace.operations);
+      })
+      .catch((error) => w.toast(error.message, true))
+      .finally(() => active && setLoadingRemote(false));
+    return () => {
+      active = false;
+    };
+  }, [w.demo, w.revision]);
+
   function commit(next: OperationsState, message: string) {
     setOperations(next);
-    saveOperations(next);
-    w.toast(message);
+    if (w.demo) {
+      saveOperations(next);
+      w.toast(message);
+      return;
+    }
+    void syncRemoteWorkspace(registry, next)
+      .then(() => w.toast(message))
+      .catch((error) => w.toast(`บันทึกไม่สำเร็จ: ${error.message}`, true));
   }
+
+  if (loadingRemote) return <Loading />;
 
   const dimensions = [...operations.agreements, ...operations.priceRequests];
   const receiverOptions = [...new Set(dimensions.map((row) => row.receiverId))]
@@ -502,6 +532,33 @@ export default function Pricing() {
             decision,
             note,
           ) => {
+            if (
+              !w.demo &&
+              (decision === "STANDARD" || decision === "BILL_ONLY")
+            ) {
+              void resolveRemotePriceRequest(
+                resolving.id,
+                approvedPrice!,
+                decision,
+                note,
+              )
+                .then(async (result) => {
+                  const workspace = await loadRemoteWorkspace();
+                  setRegistry(workspace.registry);
+                  setOperations(workspace.operations);
+                  w.refresh();
+                  w.toast(
+                    decision === "STANDARD"
+                      ? `ยืนยันราคาและอัปเดตบิลรอราคา ${result.affected_requests} บิลแล้ว`
+                      : "ยืนยันราคาเฉพาะบิลแล้ว ราคามาตรฐานไม่เปลี่ยน",
+                  );
+                  setResolving(null);
+                })
+                .catch((error) =>
+                  w.toast(`ยืนยันราคาไม่สำเร็จ: ${error.message}`, true),
+                );
+              return;
+            }
             const next = structuredClone(operations);
             const request = next.priceRequests.find(
               (row) => row.id === resolving.id,
@@ -528,11 +585,9 @@ export default function Pricing() {
               request.resolutionType = decision;
               request.resolvedAt = timestamp;
               request.resolvedBy = "ผู้ดูแล NTD";
-              const nextPendingBill = applyResolvedPriceToLocalBills(
-                request,
-                finalPrice,
-                decision,
-              );
+              const nextPendingBill = w.demo
+                ? applyResolvedPriceToLocalBills(request, finalPrice, decision)
+                : null;
               if (decision === "BILL_ONLY" && nextPendingBill) {
                 next.priceRequests.push({
                   id: crypto.randomUUID(),

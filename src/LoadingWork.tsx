@@ -11,6 +11,7 @@ import { useWorkspace } from "./context";
 import { localDate, money, number, thaiDate } from "./domain";
 import { BRANCH_OPTIONS } from "./intakeData";
 import { currentDriver, loadOperations, type Vehicle } from "./operationsStore";
+import { loadRemoteWorkspace } from "./remoteWorkspace";
 import { calendarAgeInBangkok } from "./dashboardQueue";
 import { Button, Empty, Field, Loading, Modal } from "./ui";
 import type { LoadingQueueRecord } from "./types";
@@ -65,8 +66,26 @@ export default function LoadingWork({
   const [confirming, setConfirming] = useState(false);
   const [vehicleId, setVehicleId] = useState("");
   const [busy, setBusy] = useState(false);
-  const operations = useMemo(() => loadOperations(), []);
+  const [operations, setOperations] = useState(loadOperations);
   const vehicles = operations.vehicles.filter((vehicle) => vehicle.active);
+
+  useEffect(() => {
+    if (w.demo) return;
+    let active = true;
+    loadRemoteWorkspace()
+      .then((workspace) => {
+        if (active) setOperations(workspace.operations);
+      })
+      .catch((cause) => {
+        if (active)
+          setError(
+            (cause as Error).message || "โหลดข้อมูลรถและพนักงานไม่สำเร็จ",
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [w.demo, w.revision]);
 
   useEffect(() => {
     setBranch(initialBranch);

@@ -36,10 +36,8 @@ import {
 import { thaiDate } from "./domain";
 import { Button, Field, IconButton, Loading, Modal } from "./ui";
 import Auth from "./Auth";
-import Intake from "./Intake";
 import IntakePrototype from "./IntakePrototype";
 import Shipments from "./Shipments";
-import Customers from "./Customers";
 import Settings from "./Settings";
 import MasterData from "./MasterData";
 import Pricing from "./Pricing";
@@ -247,7 +245,7 @@ export default function App() {
           },
         ]
       : []),
-    ...(canOpen("pricing") && demo
+    ...(canOpen("pricing")
       ? [{ id: "pricing", label: "ราคาและคำขอราคา", Icon: Tags }]
       : []),
     ...(canOpen("finance")
@@ -392,22 +390,14 @@ export default function App() {
                 }}
               />
             ) : page === "intake" ? (
-              demo ? (
-                <IntakePrototype />
-              ) : (
-                <Intake />
-              )
+              <IntakePrototype />
             ) : page === "loading" ? (
               <LoadingWork initialBranch={loadBranch} />
             ) : page === "shipments" ? (
               <Shipments initialSearch={query} />
             ) : page === "customers" ? (
-              demo ? (
-                <MasterData />
-              ) : (
-                <Customers />
-              )
-            ) : page === "pricing" && demo ? (
+              <MasterData />
+            ) : page === "pricing" ? (
               <Pricing />
             ) : page === "finance" ? (
               <Shipments key="finance" finance />

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Archive,
   CarFront,
@@ -52,7 +52,15 @@ import {
   downloadMasterDataJson,
 } from "./masterDataExport";
 import { PAYMENT_LABELS, type PaymentMode, type Zone } from "./types";
-import { Button, EditableSelect, Field, IconButton, Modal } from "./ui";
+import {
+  Button,
+  EditableSelect,
+  Field,
+  IconButton,
+  Loading,
+  Modal,
+} from "./ui";
+import { loadRemoteWorkspace, syncRemoteWorkspace } from "./remoteWorkspace";
 
 type Tab =
   "receivers" | "senders" | "products" | "relations" | "employees" | "vehicles";
@@ -128,6 +136,7 @@ export default function MasterData() {
   const [exportOpen, setExportOpen] = useState(false);
   const [registry, setRegistry] = useState(loadIntakeRegistry);
   const [operations, setOperations] = useState(loadOperations);
+  const [loadingRemote, setLoadingRemote] = useState(!w.demo);
   const [editor, setEditor] = useState<
     | { kind: "party"; role: "receiver" | "sender"; id?: string }
     | { kind: "product"; id?: string }
@@ -137,16 +146,46 @@ export default function MasterData() {
     | null
   >(null);
 
+  useEffect(() => {
+    if (w.demo) return;
+    let active = true;
+    loadRemoteWorkspace()
+      .then((workspace) => {
+        if (!active) return;
+        setRegistry(workspace.registry);
+        setOperations(workspace.operations);
+      })
+      .catch((error) => w.toast(error.message, true))
+      .finally(() => active && setLoadingRemote(false));
+    return () => {
+      active = false;
+    };
+  }, [w.demo, w.revision]);
+
   function commitRegistry(next: IntakeRegistrySnapshot, message: string) {
     setRegistry(next);
-    saveIntakeRegistry(next);
-    w.toast(message);
+    if (w.demo) {
+      saveIntakeRegistry(next);
+      w.toast(message);
+      return;
+    }
+    void syncRemoteWorkspace(next, operations)
+      .then(() => w.toast(message))
+      .catch((error) => w.toast(`บันทึกไม่สำเร็จ: ${error.message}`, true));
   }
   function commitOperations(next: OperationsState, message: string) {
     setOperations(next);
-    saveOperations(next);
-    w.toast(message);
+    if (w.demo) {
+      saveOperations(next);
+      w.toast(message);
+      return;
+    }
+    void syncRemoteWorkspace(registry, next)
+      .then(() => w.toast(message))
+      .catch((error) => w.toast(`บันทึกไม่สำเร็จ: ${error.message}`, true));
   }
+
+  if (loadingRemote) return <Loading />;
 
   const normalized = query.trim().toLocaleLowerCase("th");
   const role = tab === "senders" ? "sender" : "receiver";
@@ -163,7 +202,7 @@ export default function MasterData() {
     `${row.name} ${row.unit}`.toLocaleLowerCase("th").includes(normalized),
   );
   const employeeMatches = operations.employees.filter((row) =>
-    `${row.code} ${row.name} ${row.phone} ${row.position}`
+    `${row.code} ${row.name} ${row.nickname} ${row.phone} ${row.position}`
       .toLocaleLowerCase("th")
       .includes(normalized),
   );
@@ -1032,6 +1071,7 @@ function EmployeeTable({
               <td>
                 <small>{row.code}</small>
                 <strong>{row.name}</strong>
+                {row.nickname && <small>ชื่อเล่น {row.nickname}</small>}
               </td>
               <td>{row.position}</td>
               <td>{branchLabel(row.branch)}</td>
@@ -1349,7 +1389,7 @@ function ProductEditor({
             catalog.find((row) => row.name.trim() === name.trim())?.productId ||
             newId();
           onSave({
-            id: value?.id || `${productId}:${unit}`,
+            id: value?.id || newId(),
             productId,
             name: name.trim(),
             unit,
@@ -1575,6 +1615,7 @@ function EmployeeEditor({
       id,
       code: generatedCode,
       name: "",
+      nickname: "",
       phone: "",
       position: "พนักงานขับรถ",
       branch: "BKK",
@@ -1613,6 +1654,13 @@ function EmployeeEditor({
               autoFocus
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </Field>
+          <Field label="ชื่อเล่น">
+            <input
+              value={form.nickname}
+              onChange={(e) => setForm({ ...form, nickname: e.target.value })}
+              placeholder="ใช้แสดงในหน้าออกบิล"
             />
           </Field>
           <Field label="ตำแหน่ง" required>

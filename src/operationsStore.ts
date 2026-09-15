@@ -112,6 +112,7 @@ export interface Employee {
   id: string;
   code: string;
   name: string;
+  nickname: string;
   phone: string;
   position: string;
   branch: string;
@@ -373,7 +374,10 @@ export function loadOperations(): OperationsState {
             };
           },
         ),
-        employees: value.employees || [],
+        employees: (value.employees || []).map((row: Employee) => ({
+          ...row,
+          nickname: row.nickname || "",
+        })),
         vehicles: (value.vehicles || []).map((row: Vehicle) => ({
           ...row,
           note: row.note || "",

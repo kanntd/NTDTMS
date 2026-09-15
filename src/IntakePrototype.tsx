@@ -13,7 +13,7 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
-import { Button, Field, IconButton, Modal } from "./ui";
+import { Button, Field, IconButton, Loading, Modal } from "./ui";
 import { useWorkspace } from "./context";
 import { money, thaiDate } from "./domain";
 import { BRANCH_OPTIONS, agreedPrice } from "./intakeData";
@@ -38,6 +38,12 @@ import {
   pendingPriceRequest,
   saveOperations,
 } from "./operationsStore";
+import {
+  issueRemoteReceptionBill,
+  loadRemoteWorkspace,
+  syncRemoteWorkspace,
+} from "./remoteWorkspace";
+import type { IntakeRegistrySnapshot } from "./intakeRegistry";
 
 type Choice = { id: string; label: string; detail?: string };
 type Line = Measurements & {
@@ -68,7 +74,12 @@ type Bill = {
   id: string;
   number: string;
   date: string;
-  openedBy?: { employeeId: string; code: string; name: string };
+  openedBy?: {
+    employeeId: string;
+    code: string;
+    name: string;
+    nickname?: string;
+  };
   draft: Draft;
   receiver: IntakeParty;
   sender: IntakeParty;
@@ -347,8 +358,10 @@ function Picker({
 
 export default function IntakePrototype() {
   const w = useWorkspace();
-  const [state, setState] = useState(load);
+  const [state, setState] = useState(() => (w.demo ? load() : seed()));
   const [operations, setOperations] = useState(loadOperations);
+  const [remoteReady, setRemoteReady] = useState(w.demo);
+  const [busy, setBusy] = useState(false);
   const f = state.drafts;
   const [senderGlobal, setSenderGlobal] = useState(false);
   const [productGlobal, setProductGlobal] = useState<Record<string, boolean>>(
@@ -364,6 +377,36 @@ export default function IntakePrototype() {
   const [error, setError] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
   useEffect(() => {
+    if (w.demo) return;
+    let active = true;
+    setRemoteReady(false);
+    loadRemoteWorkspace()
+      .then((workspace) => {
+        if (!active) return;
+        setState((current) => ({
+          ...current,
+          parties: workspace.registry.parties,
+          catalog: workspace.registry.catalog,
+          defaults: workspace.registry.defaults,
+          partyRoles: workspace.registry.partyRoles,
+          catalogActive:
+            (workspace.registry.raw.catalogActive as Record<string, boolean>) ||
+            {},
+        }));
+        setOperations(workspace.operations);
+        setRemoteReady(true);
+      })
+      .catch((cause) => {
+        if (!active) return;
+        setError((cause as Error).message);
+        setRemoteReady(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [w.demo, w.revision]);
+  useEffect(() => {
+    if (!w.demo) return;
     try {
       localStorage.setItem(key, JSON.stringify(state));
     } catch {
@@ -371,8 +414,34 @@ export default function IntakePrototype() {
     }
   }, [state]);
   useEffect(() => {
+    if (!w.demo) return;
     saveOperations(operations);
-  }, [operations]);
+  }, [operations, w.demo]);
+  useEffect(() => {
+    if (w.demo || !remoteReady) return;
+    const timer = window.setTimeout(() => {
+      const registry: IntakeRegistrySnapshot = {
+        raw: { catalogActive: state.catalogActive || {} },
+        parties: state.parties,
+        catalog: state.catalog,
+        defaults: state.defaults,
+        partyRoles: state.partyRoles || {},
+      };
+      void syncRemoteWorkspace(registry, operations).catch((cause) =>
+        setError(`บันทึกข้อมูลกลางไม่สำเร็จ: ${(cause as Error).message}`),
+      );
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [
+    w.demo,
+    remoteReady,
+    state.parties,
+    state.catalog,
+    state.defaults,
+    state.partyRoles,
+    state.catalogActive,
+    operations,
+  ]);
   useEffect(() => {
     setState((current) => ({
       ...current,
@@ -385,19 +454,23 @@ export default function IntakePrototype() {
     (employee) =>
       employee.active &&
       (employee.id === w.profile.id ||
-        normalized(employee.name) === normalized(w.profile.display_name)),
+        normalized(employee.name) === normalized(w.profile.display_name) ||
+        normalized(employee.nickname) === normalized(w.profile.display_name)),
   );
   const loginOpener = {
     id: loginEmployee?.id || w.profile.id,
     code: loginEmployee?.code || "บัญชีผู้ใช้",
-    name: w.profile.display_name,
+    name: loginEmployee?.name || w.profile.display_name,
+    nickname: loginEmployee?.nickname || "",
   };
   const openerChoices = [
     loginOpener,
     ...operations.employees.filter(
       (employee) => employee.active && employee.id !== loginOpener.id,
     ),
-  ].sort((a, b) => a.name.localeCompare(b.name, "th"));
+  ].sort((a, b) =>
+    (a.nickname || a.name).localeCompare(b.nickname || b.name, "th"),
+  );
   const opener = openerChoices.find(
     (employee) => employee.id === f.openedByEmployeeId,
   );
@@ -593,7 +666,7 @@ export default function IntakePrototype() {
   function startAdd(kind: "receiver" | "sender", query: string) {
     setAdding({ kind, query });
   }
-  function buildBill(issue: boolean) {
+  async function buildBill(issue: boolean) {
     if (!opener) {
       setError(
         "กรุณาเลือกผู้เปิดบิล หากไม่มีรายชื่อให้เพิ่มที่ข้อมูลหลัก > พนักงาน",
@@ -672,6 +745,7 @@ export default function IntakePrototype() {
         employeeId: opener.id,
         code: opener.code,
         name: opener.name,
+        nickname: opener.nickname,
       },
       shipmentStatus: "RECEIVED",
       billingPeriod:
@@ -688,6 +762,79 @@ export default function IntakePrototype() {
         return { ...l, name: c.name, unit: c.unit };
       }),
     };
+    if (issue && !w.demo) {
+      setBusy(true);
+      try {
+        const registry: IntakeRegistrySnapshot = {
+          raw: { catalogActive: state.catalogActive || {} },
+          parties: state.parties,
+          catalog: state.catalog,
+          defaults: state.defaults,
+          partyRoles: state.partyRoles || {},
+        };
+        await syncRemoteWorkspace(registry, operations);
+        const issued = await issueRemoteReceptionBill({
+          id: bill.id,
+          sender_id: sender.id,
+          receiver_id: receiver.id,
+          destination_branch_code: f.branch,
+          payment_mode: payment,
+          credit_days: f.days,
+          billing_cycle: f.billingCycle,
+          billing_period_end: bill.billingPeriod?.end,
+          discount: f.discount,
+          discount_reason: f.reason,
+          withholding_amount: withheld,
+          rounding: amount.rounding,
+          collect_now: f.collect,
+          note: f.note,
+          opened_by_employee_id: opener.id,
+          items: bill.items.map((item) => ({
+            id: item.id,
+            catalog_id: item.catalogId,
+            name: item.name,
+            unit: item.unit,
+            quantity: item.quantity,
+            price: item.price,
+            request_price: item.requestPrice,
+            weight: item.weight,
+            width: item.width,
+            length: item.length,
+            height: item.height,
+          })),
+        });
+        bill.id = issued.id;
+        bill.number = issued.number;
+        setState((current) => ({
+          ...current,
+          bills: [bill, ...current.bills],
+          drafts: blank(loginOpener.id),
+        }));
+        const workspace = await loadRemoteWorkspace();
+        setOperations(workspace.operations);
+        setState((current) => ({
+          ...current,
+          parties: workspace.registry.parties,
+          catalog: workspace.registry.catalog,
+          defaults: workspace.registry.defaults,
+          partyRoles: workspace.registry.partyRoles,
+          catalogActive:
+            (workspace.registry.raw.catalogActive as Record<string, boolean>) ||
+            {},
+        }));
+        setSenderGlobal(false);
+        setProductGlobal({});
+        setError("");
+        setPreview(bill);
+        w.refresh();
+        w.toast(`บันทึกบิล ${issued.number} ลงฐานข้อมูลแล้ว`);
+      } catch (cause) {
+        setError(`บันทึกบิลไม่สำเร็จ: ${(cause as Error).message}`);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     if (issue) {
       setOperations((current) => {
         const next = structuredClone(current);
@@ -812,6 +959,8 @@ export default function IntakePrototype() {
     setPreview(bill);
   }
 
+  if (!remoteReady) return <Loading />;
+
   return (
     <div className="reception-desk">
       <header className="desk-heading">
@@ -835,12 +984,12 @@ export default function IntakePrototype() {
               </option>
               {openerChoices.map((employee) => (
                 <option key={employee.id} value={employee.id}>
-                  {employee.name} · {employee.code}
+                  {employee.nickname || employee.name}
                 </option>
               ))}
             </select>
           </Field>
-          <Button onClick={() => setReset(true)}>
+          <Button disabled={busy} onClick={() => setReset(true)}>
             <Plus size={16} />
             บิลใหม่
           </Button>
@@ -851,7 +1000,7 @@ export default function IntakePrototype() {
         className="desk-layout"
         onSubmit={(e) => {
           e.preventDefault();
-          buildBill(true);
+          void buildBill(true);
         }}
       >
         <div className="desk-main">
@@ -1307,14 +1456,14 @@ export default function IntakePrototype() {
               {error}
             </p>
           )}
-          <Button type="submit" className="primary full">
+          <Button busy={busy} type="submit" className="primary full">
             <Printer size={17} />
             {amount.pending ? "บันทึกบิลรอราคา" : "บันทึกและเปิดใบพิมพ์"}
           </Button>
           <Button
             type="button"
             className="full"
-            onClick={() => buildBill(false)}
+            onClick={() => void buildBill(false)}
           >
             <FileText size={16} />
             ตรวจบิล
@@ -1450,8 +1599,8 @@ function BillPreview({
         </header>
         <p>เอกสารตัวอย่าง · {thaiDate(b.date)}</p>
         <p>
-          ผู้เปิดบิล: {b.openedBy?.name || "ไม่พบข้อมูล"}
-          {b.openedBy?.code ? ` (${b.openedBy.code})` : ""}
+          ผู้เปิดบิล:{" "}
+          {b.openedBy?.nickname || b.openedBy?.name || "ไม่พบข้อมูล"}
         </p>
         <p>
           กรุงเทพฯ →{" "}

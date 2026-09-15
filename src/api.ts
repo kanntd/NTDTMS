@@ -131,7 +131,7 @@ export async function getLoadingQueue(): Promise<LoadingQueueRecord[]> {
     const result = await supabase
       .from("shipments")
       .select(
-        "id,shipment_no,received_at,sender_snapshot,receiver_snapshot,zone_id,district_id,total_amount,total_quantity,shipment_status,shipment_items(id,product_id,description,quantity,unit,unit_price,weight,fragile)",
+        "id,shipment_no,received_at,sender_snapshot,receiver_snapshot,zone_id,district_id,destination_branch_code,total_amount,total_quantity,shipment_status,price_pending,shipment_items(id,product_id,description,quantity,unit,unit_price,weight,fragile)",
       )
       .eq("shipment_status", "RECEIVED")
       .order("received_at", { ascending: true })
