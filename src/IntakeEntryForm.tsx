@@ -3,7 +3,6 @@ import { Check, Plus } from "lucide-react";
 import { Button, EditableSelect, Field, Modal } from "./ui";
 import { BRANCH_OPTIONS, PROVINCE_OPTIONS } from "./intakeData";
 import {
-  entryId,
   measurementFields,
   normalizeEntry,
   validMeasurements,
@@ -150,7 +149,7 @@ export default function IntakeEntryForm({
       onProduct({
         item: {
           ...(exactProduct || {
-            id: entryId(productId, knownUnit),
+            id: crypto.randomUUID(),
             productId,
             name: existingProduct?.name || name.trim(),
             unit: knownUnit,
