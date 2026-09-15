@@ -295,8 +295,23 @@ export type RemoteBillInput = {
   }>;
 };
 
+export function sanitizeRemoteBillItems(items: RemoteBillInput["items"]) {
+  return items.map((item) => ({
+    ...item,
+    weight: item.weight?.trim() || undefined,
+    width: item.width?.trim() || undefined,
+    length: item.length?.trim() || undefined,
+    height: item.height?.trim() || undefined,
+  }));
+}
+
 export async function issueRemoteReceptionBill(data: RemoteBillInput) {
-  const result = await supabase.rpc("issue_reception_bill_v2", { data });
+  const result = await supabase.rpc("issue_reception_bill_v2", {
+    data: {
+      ...data,
+      items: sanitizeRemoteBillItems(data.items),
+    },
+  });
   if (result.error) throw result.error;
   return result.data as { id: string; number: string };
 }

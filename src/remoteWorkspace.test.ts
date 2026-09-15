@@ -1,8 +1,41 @@
 import { describe, expect, it } from "vitest";
 import { pairRateKey } from "./intakeEntryData";
-import { mapRemoteWorkspace } from "./remoteWorkspace";
+import { mapRemoteWorkspace, sanitizeRemoteBillItems } from "./remoteWorkspace";
 
 describe("shared reception workspace", () => {
+  it("omits blank optional measurements from bill items", () => {
+    const [blank, measured] = sanitizeRemoteBillItems([
+      {
+        id: "item-1",
+        catalog_id: "catalog-1",
+        name: "รองเท้า",
+        unit: "กล่อง",
+        quantity: 1,
+        price: null,
+        request_price: true,
+        weight: "",
+        width: " ",
+        length: "",
+        height: "",
+      },
+      {
+        id: "item-2",
+        catalog_id: "catalog-2",
+        name: "รองเท้า",
+        unit: "มัด",
+        quantity: 2,
+        price: 100,
+        request_price: false,
+        weight: " 4.5 ",
+      },
+    ]);
+    expect(JSON.parse(JSON.stringify(blank))).not.toHaveProperty("weight");
+    expect(JSON.parse(JSON.stringify(blank))).not.toHaveProperty("width");
+    expect(JSON.parse(JSON.stringify(blank))).not.toHaveProperty("length");
+    expect(JSON.parse(JSON.stringify(blank))).not.toHaveProperty("height");
+    expect(measured.weight).toBe("4.5");
+  });
+
   it("maps customer relationships, nicknames, and current price history", () => {
     const workspace = mapRemoteWorkspace({
       parties: [
