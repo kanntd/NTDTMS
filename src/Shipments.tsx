@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Search,
   Download,
@@ -41,6 +41,7 @@ export default function Shipments({
     [failure, setFailure] = useState(""),
     [detail, setDetail] = useState<ShipmentDetail | null>(null),
     [searchItems, setSearchItems] = useState<Record<string, Item[]>>({});
+  const loadedOnce = useRef(false);
   useEffect(() => {
     setSearch(initialSearch);
     if (initialSearch.trim()) setDate("");
@@ -56,6 +57,7 @@ export default function Shipments({
             setRows(r.rows);
             setCount(r.count);
             setFailure("");
+            loadedOnce.current = true;
           }
         })
         .catch((e) => {
@@ -292,7 +294,7 @@ export default function Shipments({
             {failure}
             <Button onClick={w.refresh}>ลองใหม่</Button>
           </div>
-        ) : loading ? (
+        ) : loading && !loadedOnce.current ? (
           <Loading />
         ) : rows.length === 0 ? (
           <Empty

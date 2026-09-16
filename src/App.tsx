@@ -153,7 +153,7 @@ export default function App() {
     let refreshTimer: number | undefined;
     const queueRefresh = () => {
       window.clearTimeout(refreshTimer);
-      refreshTimer = window.setTimeout(refresh, 350);
+      refreshTimer = window.setTimeout(refresh, 800);
     };
     const channel = supabase
       .channel(`ntdtms-workspace-${profile.company_id}`)

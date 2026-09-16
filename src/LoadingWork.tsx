@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   ArrowUpDown,
   Check,
@@ -67,6 +73,7 @@ export default function LoadingWork({
   const [vehicleId, setVehicleId] = useState("");
   const [busy, setBusy] = useState(false);
   const [operations, setOperations] = useState(loadOperations);
+  const loadedOnce = useRef(false);
   const vehicles = operations.vehicles.filter((vehicle) => vehicle.active);
 
   useEffect(() => {
@@ -98,6 +105,7 @@ export default function LoadingWork({
     setError("");
     try {
       setRows(await w.service.loadingQueue());
+      loadedOnce.current = true;
     } catch (cause) {
       setError((cause as Error).message || "โหลดรายการขึ้นรถไม่สำเร็จ");
     } finally {
@@ -314,7 +322,7 @@ export default function LoadingWork({
 
         {error ? (
           <div className="alert error">{error}</div>
-        ) : loading ? (
+        ) : loading && !loadedOnce.current ? (
           <Loading />
         ) : visible.length === 0 ? (
           <Empty title="ไม่พบบิลรอขึ้นรถตามตัวกรองนี้" />

@@ -381,7 +381,6 @@ export default function IntakePrototype() {
   useEffect(() => {
     if (w.demo) return;
     let active = true;
-    setRemoteReady(false);
     loadRemoteWorkspace()
       .then((workspace) => {
         if (!active) return;
@@ -826,6 +825,7 @@ export default function IntakePrototype() {
           drafts: blank(loginOpener.id),
         }));
         const workspace = await loadRemoteWorkspace();
+        applyingRemoteRef.current = true;
         setOperations(workspace.operations);
         setState((current) => ({
           ...current,
@@ -1591,7 +1591,9 @@ export default function IntakePrototype() {
           onClose={() => setFractionalWarning(false)}
         >
           <div className="modal-body modal-confirm">
-            <p>พบจำนวนสินค้าที่มีทศนิยม กรุณาตรวจสอบว่าใส่จำนวนถูกต้องหรือไม่</p>
+            <p>
+              พบจำนวนสินค้าที่มีทศนิยม กรุณาตรวจสอบว่าใส่จำนวนถูกต้องหรือไม่
+            </p>
             <div className="alert warning">
               {f.lines
                 .filter((line) => !Number.isInteger(line.quantity))
@@ -1601,8 +1603,8 @@ export default function IntakePrototype() {
                   );
                   return (
                     <div key={line.id}>
-                      รายการ {index + 1}: {item?.name || "สินค้า"} {line.quantity}{" "}
-                      {item?.unit || "หน่วย"}
+                      รายการ {index + 1}: {item?.name || "สินค้า"}{" "}
+                      {line.quantity} {item?.unit || "หน่วย"}
                     </div>
                   );
                 })}
