@@ -374,8 +374,10 @@ export default function IntakePrototype() {
   } | null>(null);
   const [preview, setPreview] = useState<Bill | null>(null);
   const [reset, setReset] = useState(false);
+  const [fractionalWarning, setFractionalWarning] = useState(false);
   const [error, setError] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
+  const applyingRemoteRef = useRef(false);
   useEffect(() => {
     if (w.demo) return;
     let active = true;
@@ -383,6 +385,7 @@ export default function IntakePrototype() {
     loadRemoteWorkspace()
       .then((workspace) => {
         if (!active) return;
+        applyingRemoteRef.current = true;
         setState((current) => ({
           ...current,
           parties: workspace.registry.parties,
@@ -419,6 +422,10 @@ export default function IntakePrototype() {
   }, [operations, w.demo]);
   useEffect(() => {
     if (w.demo || !remoteReady) return;
+    if (applyingRemoteRef.current) {
+      applyingRemoteRef.current = false;
+      return;
+    }
     const timer = window.setTimeout(() => {
       const registry: IntakeRegistrySnapshot = {
         raw: { catalogActive: state.catalogActive || {} },
@@ -666,7 +673,7 @@ export default function IntakePrototype() {
   function startAdd(kind: "receiver" | "sender", query: string) {
     setAdding({ kind, query });
   }
-  async function buildBill(issue: boolean) {
+  async function buildBill(issue: boolean, fractionalConfirmed = false) {
     if (!opener) {
       setError(
         "กรุณาเลือกผู้เปิดบิล หากไม่มีรายชื่อให้เพิ่มที่ข้อมูลหลัก > พนักงาน",
@@ -711,6 +718,14 @@ export default function IntakePrototype() {
       )
     ) {
       setError("กรุณาเลือกสินค้าและจำนวนให้ครบ");
+      return;
+    }
+    if (
+      issue &&
+      !fractionalConfirmed &&
+      f.lines.some((line) => !Number.isInteger(line.quantity))
+    ) {
+      setFractionalWarning(true);
       return;
     }
     if (
@@ -1567,6 +1582,45 @@ export default function IntakePrototype() {
             >
               เริ่มบิลใหม่
             </Button>
+          </div>
+        </Modal>
+      )}
+      {fractionalWarning && (
+        <Modal
+          title="ตรวจสอบจำนวนสินค้า"
+          onClose={() => setFractionalWarning(false)}
+        >
+          <div className="modal-body modal-confirm">
+            <p>พบจำนวนสินค้าที่มีทศนิยม กรุณาตรวจสอบว่าใส่จำนวนถูกต้องหรือไม่</p>
+            <div className="alert warning">
+              {f.lines
+                .filter((line) => !Number.isInteger(line.quantity))
+                .map((line, index) => {
+                  const item = state.catalog.find(
+                    (catalog) => catalog.id === line.catalogId,
+                  );
+                  return (
+                    <div key={line.id}>
+                      รายการ {index + 1}: {item?.name || "สินค้า"} {line.quantity}{" "}
+                      {item?.unit || "หน่วย"}
+                    </div>
+                  );
+                })}
+            </div>
+            <div className="modal-footer">
+              <Button onClick={() => setFractionalWarning(false)}>
+                กลับไปแก้
+              </Button>
+              <Button
+                className="primary"
+                onClick={() => {
+                  setFractionalWarning(false);
+                  void buildBill(true, true);
+                }}
+              >
+                ยืนยันว่าถูกต้อง
+              </Button>
+            </div>
           </div>
         </Modal>
       )}

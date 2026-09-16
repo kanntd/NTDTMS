@@ -139,7 +139,14 @@ export async function getLoadingQueue(): Promise<LoadingQueueRecord[]> {
     if (result.error) throw result.error;
     const batch = (result.data || []).map((row) => ({
       ...row,
-      items: row.shipment_items || [],
+      total_amount: Number(row.total_amount) || 0,
+      total_quantity: Number(row.total_quantity) || 0,
+      items: (row.shipment_items || []).map((item) => ({
+        ...item,
+        quantity: Number(item.quantity) || 0,
+        unit_price: Number(item.unit_price) || 0,
+        weight: Number(item.weight) || 0,
+      })),
     })) as unknown as LoadingQueueRecord[];
     rows.push(...batch);
     if (batch.length < 500) break;

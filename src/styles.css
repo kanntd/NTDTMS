@@ -350,6 +350,12 @@ table {
   color: #237454;
   border: 1px solid #d2e7d9;
 }
+.alert.warning {
+  display: grid;
+  background: #fff8e8;
+  color: #7c5a12;
+  border: 1px solid #ead9a8;
+}
 .alert > div {
   display: block;
 }

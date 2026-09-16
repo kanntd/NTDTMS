@@ -149,6 +149,38 @@ export default function App() {
     };
   }, [service, profile?.id, revision]);
   useEffect(() => {
+    if (demo || !profile?.is_active) return;
+    let refreshTimer: number | undefined;
+    const queueRefresh = () => {
+      window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(refresh, 350);
+    };
+    const channel = supabase
+      .channel(`ntdtms-workspace-${profile.company_id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "workspace_revisions",
+          filter: `company_id=eq.${profile.company_id}`,
+        },
+        queueRefresh,
+      )
+      .subscribe();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") queueRefresh();
+    };
+    window.addEventListener("focus", queueRefresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearTimeout(refreshTimer);
+      window.removeEventListener("focus", queueRefresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      void supabase.removeChannel(channel);
+    };
+  }, [demo, profile?.company_id, profile?.is_active, refresh]);
+  useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(null), 6500);
     return () => clearTimeout(timer);
