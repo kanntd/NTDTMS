@@ -13,6 +13,7 @@ import type {
   LoadingQueueRecord,
   Item,
   CompanyBranch,
+  ShipmentEditInput,
 } from "./types";
 
 export const supabase = createClient(
@@ -251,6 +252,19 @@ export async function getShipment(id: string): Promise<ShipmentDetail> {
 export async function issueShipment(input: ShipmentInput) {
   const id = check(await supabase.rpc("issue_shipment", { data: input }));
   return getShipment(id);
+}
+export async function updateReceptionBill(
+  doc: string,
+  data: ShipmentEditInput,
+  reason: string,
+) {
+  const result = await supabase.rpc("update_reception_bill_v2", {
+    doc,
+    data,
+    reason,
+  });
+  if (result.error) throw result.error;
+  return getShipment(doc);
 }
 export async function saveParty(data: Partial<Party>) {
   return check(await supabase.rpc("save_party", { data }));

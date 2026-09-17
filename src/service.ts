@@ -1,16 +1,19 @@
 import * as api from "./api";
 import { createDemoShipment, demoProducts, loadDemo, saveDemo } from "./demo";
 import { localDate } from "./domain";
+import { BRANCH_OPTIONS } from "./intakeData";
 import type {
   DashboardStats,
   Party,
   Shipment,
   ShipmentInput,
+  ShipmentEditInput,
   StaffInvite,
 } from "./types";
 import { ROLE_MODULE_DEFAULTS } from "./types";
 import type { LoadConfirmation, LoadingQueueRecord } from "./types";
 import {
+  editStoredReceptionBill,
   readReceptionBills,
   receptionBillToShipment,
   receptionLoadingQueue,
@@ -126,6 +129,83 @@ export function createService(demo: boolean) {
         shipment = createDemoShipment(state, input);
       if (!state.shipments.some((s) => s.id === shipment.id))
         state.shipments.unshift(shipment);
+      saveDemo(state);
+      return shipment;
+    },
+    updateBill: async (
+      doc: string,
+      input: ShipmentEditInput,
+      reason: string,
+    ) => {
+      if (!demo) return api.updateReceptionBill(doc, input, reason);
+      if (editStoredReceptionBill(doc, input)) {
+        const bill = readReceptionBills().find((row) => row.id === doc);
+        if (!bill) throw new Error("ไม่พบบิล");
+        return receptionBillToShipment(bill);
+      }
+      const state = loadDemo();
+      const shipment = state.shipments.find((row) => row.id === doc);
+      if (!shipment) throw new Error("ไม่พบบิล");
+      const subtotal = input.items.reduce(
+        (sum, item) => sum + item.quantity * (item.price || 0),
+        0,
+      );
+      const total = Math.max(0, subtotal - input.discount);
+      const due = Math.max(0, total - input.withholding_amount);
+      if (due < shipment.paid_amount)
+        throw new Error("ยอดใหม่ต่ำกว่าเงินที่รับแล้ว");
+      const branch = BRANCH_OPTIONS.find(
+        (option) => option.code === input.destination_branch_code,
+      );
+      Object.assign(shipment, {
+        sender_party_id: input.sender_id,
+        receiver_party_id: input.receiver_id,
+        sender_snapshot: input.sender,
+        receiver_snapshot: input.receiver,
+        payer_party_id: input.payment_mode.endsWith("ORIGIN")
+          ? input.sender_id
+          : input.receiver_id,
+        destination_branch_code: input.destination_branch_code,
+        zone_id: branch?.zoneId || shipment.zone_id,
+        district_id: branch?.districtId || shipment.district_id,
+        zone_name: branch?.name || shipment.zone_name,
+        zone_color: branch?.color || shipment.zone_color,
+        payment_mode: input.payment_mode,
+        credit_days: input.payment_mode.startsWith("CREDIT")
+          ? input.credit_days
+          : 0,
+        total_quantity: input.items.reduce(
+          (sum, item) => sum + item.quantity,
+          0,
+        ),
+        total_weight: input.items.reduce(
+          (sum, item) => sum + (Number(item.weight) || 0),
+          0,
+        ),
+        total_amount: total,
+        withholding_amount: input.withholding_amount,
+        outstanding_amount: due - shipment.paid_amount,
+        discount: input.discount,
+        price_reason: input.discount_reason,
+        price_pending: input.items.some((item) => item.request_price),
+        note: input.note,
+        version_no: (shipment.version_no || 1) + 1,
+        items: input.items.map((item) => ({
+          id: item.id,
+          product_id: item.catalog_id,
+          product_unit_id: item.catalog_id,
+          description: item.name,
+          quantity: item.quantity,
+          unit: item.unit,
+          unit_price: item.price || 0,
+          weight: Number(item.weight) || 0,
+          fragile: false,
+          price_pending: item.request_price,
+          width: Number(item.width) || null,
+          length: Number(item.length) || null,
+          height: Number(item.height) || null,
+        })),
+      });
       saveDemo(state);
       return shipment;
     },

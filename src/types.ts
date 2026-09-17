@@ -65,12 +65,17 @@ export interface Profile {
 export interface Item {
   id: string;
   product_id: string;
+  product_unit_id?: string;
   description: string;
   quantity: number;
   unit: string;
   unit_price: number;
   weight: number;
   fragile: boolean;
+  price_pending?: boolean;
+  width?: number | null;
+  length?: number | null;
+  height?: number | null;
 }
 export interface PartySnapshot {
   id?: string;
@@ -92,8 +97,38 @@ export interface ShipmentInput {
   dropoff_phone: string;
   extra_charge: number;
   discount: number;
+  withholding_amount?: number;
   price_reason: string;
   collect_now: boolean;
+}
+export interface ShipmentEditItem {
+  id: string;
+  catalog_id: string;
+  name: string;
+  unit: string;
+  quantity: number;
+  price: number | null;
+  request_price: boolean;
+  weight?: string;
+  width?: string;
+  length?: string;
+  height?: string;
+}
+export interface ShipmentEditInput {
+  version_no: number;
+  sender_id: string;
+  receiver_id: string;
+  sender: PartySnapshot;
+  receiver: PartySnapshot;
+  destination_branch_code: string;
+  payment_mode: PaymentMode;
+  credit_days: number;
+  billing_cycle: "MONTH_END" | "NET_DAYS";
+  discount: number;
+  discount_reason: string;
+  withholding_amount: number;
+  note: string;
+  items: ShipmentEditItem[];
 }
 export interface Shipment {
   id: string;
@@ -120,10 +155,12 @@ export interface Shipment {
   dropoff_phone: string;
   extra_charge: number;
   discount: number;
+  withholding_amount?: number;
   price_reason: string;
   invoice_id: string;
   due_date: string;
   created_by: string;
+  version_no?: number;
   sender_party_id?: string;
   receiver_party_id?: string;
   opened_by_employee_id?: string;

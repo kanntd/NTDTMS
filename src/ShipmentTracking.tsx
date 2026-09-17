@@ -2,6 +2,8 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   Download,
+  Eye,
+  LockKeyhole,
   Pencil,
   Printer,
   RefreshCw,
@@ -9,6 +11,7 @@ import {
   Search,
 } from "lucide-react";
 import { useWorkspace } from "./context";
+import { billEditAccessMessage, canEditShipment } from "./billEditPolicy";
 import {
   downloadCsv,
   localDate,
@@ -22,6 +25,7 @@ import { loadIntakeRegistry } from "./intakeRegistry";
 import { loadOperations } from "./operationsStore";
 import { loadRemoteWorkspace } from "./remoteWorkspace";
 import Receipt from "./Receipt";
+import ShipmentEditModal from "./ShipmentEditModal";
 import {
   PAYMENT_LABELS,
   STATUS_LABELS,
@@ -87,6 +91,7 @@ export default function ShipmentTracking({
   const [loading, setLoading] = useState(true);
   const [failure, setFailure] = useState("");
   const [detail, setDetail] = useState<ShipmentDetail | null>(null);
+  const [editDetail, setEditDetail] = useState<ShipmentDetail | null>(null);
   const [autoPrint, setAutoPrint] = useState(false);
   const loadedOnce = useRef(false);
 
@@ -237,6 +242,18 @@ export default function ShipmentTracking({
     try {
       setAutoPrint(print);
       setDetail(await w.service.detail(row.id));
+    } catch (error) {
+      w.toast((error as Error).message, true);
+    }
+  }
+
+  async function edit(row: Shipment) {
+    if (!canEditShipment(w.profile.role, row.shipment_status)) {
+      w.toast(billEditAccessMessage(w.profile.role, row.shipment_status), true);
+      return;
+    }
+    try {
+      setEditDetail(await w.service.detail(row.id));
     } catch (error) {
       w.toast((error as Error).message, true);
     }
@@ -584,10 +601,29 @@ export default function ShipmentTracking({
                     <td>
                       <div className="shipment-row-actions">
                         <IconButton
-                          label={`เปิดหรือแก้ไขบิล ${shipment.shipment_no}`}
+                          label={`ดูบิล ${shipment.shipment_no}`}
                           onClick={() => void open(shipment)}
                         >
-                          <Pencil size={16} />
+                          <Eye size={16} />
+                        </IconButton>
+                        <IconButton
+                          label={`${billEditAccessMessage(w.profile.role, shipment.shipment_status)}: ${shipment.shipment_no}`}
+                          disabled={
+                            !canEditShipment(
+                              w.profile.role,
+                              shipment.shipment_status,
+                            )
+                          }
+                          onClick={() => void edit(shipment)}
+                        >
+                          {canEditShipment(
+                            w.profile.role,
+                            shipment.shipment_status,
+                          ) ? (
+                            <Pencil size={16} />
+                          ) : (
+                            <LockKeyhole size={16} />
+                          )}
                         </IconButton>
                         <IconButton
                           label={`พิมพ์ซ้ำบิล ${shipment.shipment_no}`}
@@ -619,6 +655,15 @@ export default function ShipmentTracking({
             setDetail(null);
             setAutoPrint(false);
           }}
+        />
+      )}
+      {editDetail && (
+        <ShipmentEditModal
+          shipment={editDetail}
+          registry={registry}
+          operations={operations}
+          onClose={() => setEditDetail(null)}
+          onSaved={() => setEditDetail(null)}
         />
       )}
     </>

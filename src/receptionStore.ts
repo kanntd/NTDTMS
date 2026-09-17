@@ -1,7 +1,12 @@
 import { localDate } from "./domain";
 import { BRANCH_OPTIONS } from "./intakeData";
 import type { IntakeParty } from "./intakeEntryData";
-import type { LoadingQueueRecord, PaymentMode, ShipmentDetail } from "./types";
+import type {
+  LoadingQueueRecord,
+  PaymentMode,
+  ShipmentDetail,
+  ShipmentEditInput,
+} from "./types";
 
 export const RECEPTION_STORAGE_KEY = "ntdtms-reception-local-v5";
 
@@ -14,6 +19,9 @@ type StoredLine = {
   price: number | null;
   requestPrice: boolean;
   weight?: string;
+  width?: string;
+  length?: string;
+  height?: string;
 };
 
 export type ReceptionLoadRecord = {
@@ -37,6 +45,8 @@ export type StoredReceptionBill = {
   };
   shipmentStatus?: "RECEIVED" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED";
   load?: ReceptionLoadRecord;
+  versionNo?: number;
+  withholdingAmount?: number;
   draft: {
     branch: string;
     payment: PaymentMode | "";
@@ -88,6 +98,56 @@ export function updateReceptionBillStatus(
   if (!bill) return false;
   bill.shipmentStatus = status;
   if (load) bill.load = load;
+  localStorage.setItem(RECEPTION_STORAGE_KEY, JSON.stringify(snapshot));
+  return true;
+}
+
+export function editStoredReceptionBill(id: string, input: ShipmentEditInput) {
+  const snapshot = readReceptionSnapshot();
+  if (!snapshot) return false;
+  const bill = snapshot.bills?.find((row) => row.id === id);
+  if (!bill) return false;
+  const subtotal = input.items.reduce(
+    (sum, item) => sum + item.quantity * (item.price || 0),
+    0,
+  );
+  const total = Math.max(0, subtotal - input.discount);
+  const due = Math.max(0, total - input.withholding_amount);
+  bill.versionNo = (bill.versionNo || 1) + 1;
+  bill.withholdingAmount = input.withholding_amount;
+  bill.receiver = {
+    ...bill.receiver,
+    ...input.receiver,
+    id: input.receiver_id,
+  };
+  bill.sender = { ...bill.sender, ...input.sender, id: input.sender_id };
+  bill.draft = {
+    ...bill.draft,
+    branch: input.destination_branch_code,
+    payment: input.payment_mode,
+    days: input.credit_days,
+    note: input.note,
+    discount: input.discount,
+    reason: input.discount_reason,
+  };
+  bill.items = input.items.map((item) => ({
+    id: item.id,
+    catalogId: item.catalog_id,
+    name: item.name,
+    unit: item.unit,
+    quantity: item.quantity,
+    price: item.price,
+    requestPrice: item.request_price,
+    weight: item.weight,
+    width: item.width,
+    length: item.length,
+    height: item.height,
+  }));
+  bill.amounts = {
+    total,
+    due,
+    pending: input.items.some((item) => item.request_price),
+  };
   localStorage.setItem(RECEPTION_STORAGE_KEY, JSON.stringify(snapshot));
   return true;
 }
@@ -145,10 +205,12 @@ export function receptionBillToShipment(
     dropoff_phone: "",
     extra_charge: 0,
     discount: bill.draft.discount || 0,
+    withholding_amount: bill.withholdingAmount || 0,
     price_reason: bill.draft.reason || "",
     invoice_id: `local-${bill.id}`,
     due_date: bill.billingPeriod?.end || localDate(new Date(bill.date)),
     created_by: bill.openedBy?.employeeId || "demo",
+    version_no: bill.versionNo || 1,
     sender_party_id: bill.sender.id,
     receiver_party_id: bill.receiver.id,
     opened_by_employee_id: bill.openedBy?.employeeId || "",
@@ -159,12 +221,17 @@ export function receptionBillToShipment(
     items: bill.items.map((item) => ({
       id: item.id,
       product_id: item.catalogId,
+      product_unit_id: item.catalogId,
       description: item.name,
       quantity: item.quantity,
       unit: item.unit,
       unit_price: item.price || 0,
       weight: Number(item.weight) || 0,
       fragile: false,
+      price_pending: item.requestPrice,
+      width: Number(item.width) || null,
+      length: Number(item.length) || null,
+      height: Number(item.height) || null,
     })),
     files: [],
   };
