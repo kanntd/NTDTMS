@@ -10,6 +10,7 @@ import {
   HardDrive,
   ExternalLink,
   Trash2,
+  Building2,
 } from "lucide-react";
 import { useWorkspace } from "./context";
 import { Button, Empty, Field, IconButton, Modal } from "./ui";
@@ -22,11 +23,24 @@ import {
   type StaffInvite,
   type Zone,
   type Role,
+  type BranchKind,
+  type CompanyBranch,
 } from "./types";
+import { billNumberPrefix } from "./billNumber";
+
+const BRANCH_KIND_LABELS: Record<BranchKind, string> = {
+  ORIGIN: "ต้นทาง",
+  DESTINATION: "ปลายทาง",
+  BOTH: "ต้นทางและปลายทาง",
+  HUB: "ศูนย์คัดแยก",
+  ADMIN: "สำนักงาน",
+};
 
 export default function Settings() {
   const w = useWorkspace(),
-    [tab, setTab] = useState("zones"),
+    [tab, setTab] = useState("branches"),
+    [branch, setBranch] = useState<CompanyBranch | null>(null),
+    [creatingBranch, setCreatingBranch] = useState(false),
     [zone, setZone] = useState<Zone | null>(null),
     [creatingZone, setCreatingZone] = useState(false),
     [staff, setStaff] = useState<StaffInvite[]>([]),
@@ -69,6 +83,8 @@ export default function Settings() {
       await fn();
       setZone(null);
       setCreatingZone(false);
+      setBranch(null);
+      setCreatingBranch(false);
       setPerson(null);
       setPrice(null);
       w.refresh();
@@ -90,6 +106,38 @@ export default function Settings() {
       sort_order: sortOrder,
       districts: [],
     });
+  }
+  function openNewBranch() {
+    setCreatingBranch(true);
+    setBranch({
+      id: crypto.randomUUID(),
+      code: "",
+      document_code: "",
+      name: "",
+      branch_kind: "DESTINATION",
+      province_name: "",
+      can_issue_bills: false,
+      is_active: true,
+      document_code_locked_at: null,
+    });
+  }
+  async function deleteBranch(target: CompanyBranch) {
+    if (
+      !window.confirm(
+        `หยุดใช้สาขา ${target.name} ใช่หรือไม่? บิลเก่าจะยังเก็บรหัสสาขานี้ไว้`,
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      await w.service.setting("branch_delete", { id: target.id });
+      w.refresh();
+      w.toast(`หยุดใช้สาขา ${target.name} แล้ว`);
+    } catch (error) {
+      w.toast((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
   }
   async function deleteZone(target: Zone) {
     if (
@@ -135,6 +183,7 @@ export default function Settings() {
       </div>
       <div className="settings-tabs">
         {[
+          { id: "branches", label: "สาขาบริษัท", Icon: Building2 },
           { id: "zones", label: "พื้นที่ให้บริการ", Icon: MapPin },
           { id: "prices", label: "ตารางราคา", Icon: SlidersHorizontal },
           { id: "staff", label: "พนักงานและสิทธิ์", Icon: UsersRound },
@@ -150,6 +199,101 @@ export default function Settings() {
           </button>
         ))}
       </div>
+      {tab === "branches" && (
+        <section className="settings-section">
+          <div className="section-heading">
+            <div>
+              <h2>สาขาบริษัทและเลขที่บิล</h2>
+              <p className="muted">
+                รหัสออกบิลจะแสดงหน้าปีและเลขลำดับ เช่น B0126000001
+              </p>
+            </div>
+            <Button className="primary" onClick={openNewBranch}>
+              <Plus size={16} />
+              เพิ่มสาขา
+            </Button>
+          </div>
+          <table className="data-table branch-table">
+            <thead>
+              <tr>
+                <th>สาขา</th>
+                <th>รหัสออกบิล</th>
+                <th>ประเภท</th>
+                <th>จังหวัด</th>
+                <th>ออกบิล</th>
+                <th>สถานะ</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {w.branches
+                .slice()
+                .sort(
+                  (a, b) =>
+                    Number(b.is_active) - Number(a.is_active) ||
+                    a.code.localeCompare(b.code),
+                )
+                .map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <strong>{row.name}</strong>
+                      <small className="permission-summary">
+                        รหัสเส้นทาง {row.code}
+                      </small>
+                    </td>
+                    <td>
+                      <strong className="document-code">
+                        {row.document_code || "ยังไม่กำหนด"}
+                      </strong>
+                      {row.document_code_locked_at && (
+                        <small className="permission-summary">
+                          ล็อกหลังใช้ออกบิลแล้ว
+                        </small>
+                      )}
+                    </td>
+                    <td>{BRANCH_KIND_LABELS[row.branch_kind]}</td>
+                    <td>{row.province_name || "ไม่ระบุ"}</td>
+                    <td>
+                      <span
+                        className={
+                          "badge " +
+                          (row.can_issue_bills
+                            ? "status-DELIVERED"
+                            : "status-CANCELLED")
+                        }
+                      >
+                        {row.can_issue_bills ? "ออกบิลได้" : "ไม่ได้"}
+                      </span>
+                    </td>
+                    <td>{row.is_active ? "ใช้งาน" : "หยุดใช้งาน"}</td>
+                    <td>
+                      <div className="zone-setting-actions">
+                        <IconButton
+                          label={`แก้ไขสาขา ${row.name}`}
+                          onClick={() => {
+                            setCreatingBranch(false);
+                            setBranch({ ...row });
+                          }}
+                        >
+                          <Pencil size={16} />
+                        </IconButton>
+                        {row.is_active && (
+                          <IconButton
+                            label={`หยุดใช้สาขา ${row.name}`}
+                            className="danger"
+                            onClick={() => void deleteBranch(row)}
+                          >
+                            <Trash2 size={16} />
+                          </IconButton>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </section>
+      )}
       {tab === "zones" && (
         <section className="settings-section">
           <div className="section-heading">
@@ -408,6 +552,145 @@ export default function Settings() {
             </div>
           </div>
         </section>
+      )}
+      {branch && (
+        <Modal
+          title={creatingBranch ? "เพิ่มสาขาบริษัท" : "แก้ไขสาขาบริษัท"}
+          onClose={busy ? () => {} : () => setBranch(null)}
+        >
+          <form
+            className="modal-form"
+            onSubmit={(event) =>
+              save(event, () =>
+                w.service.setting("branch_save", {
+                  ...branch,
+                  code: branch.code.trim().toUpperCase(),
+                  document_code: branch.document_code.trim().toUpperCase(),
+                  name: branch.name.trim(),
+                  province_name: branch.province_name.trim(),
+                  is_new: creatingBranch,
+                }),
+              )
+            }
+          >
+            <div className="two-fields">
+              <Field label="รหัสเส้นทางเดิม" required>
+                <input
+                  required
+                  maxLength={8}
+                  value={branch.code}
+                  readOnly={!creatingBranch}
+                  onChange={(event) =>
+                    setBranch({
+                      ...branch,
+                      code: event.target.value.toUpperCase(),
+                    })
+                  }
+                  placeholder="เช่น BKK"
+                />
+              </Field>
+              <Field label="รหัสออกบิล" required>
+                <input
+                  required
+                  pattern="[A-Za-z][0-9]{2}"
+                  maxLength={3}
+                  value={branch.document_code}
+                  readOnly={Boolean(branch.document_code_locked_at)}
+                  onChange={(event) =>
+                    setBranch({
+                      ...branch,
+                      document_code: event.target.value.toUpperCase(),
+                    })
+                  }
+                  placeholder="เช่น B01"
+                />
+              </Field>
+              <Field label="ชื่อสาขา" required>
+                <input
+                  required
+                  value={branch.name}
+                  onChange={(event) =>
+                    setBranch({ ...branch, name: event.target.value })
+                  }
+                />
+              </Field>
+              <Field label="จังหวัด" required>
+                <input
+                  required
+                  value={branch.province_name}
+                  onChange={(event) =>
+                    setBranch({
+                      ...branch,
+                      province_name: event.target.value,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="ประเภทสาขา">
+                <select
+                  value={branch.branch_kind}
+                  onChange={(event) =>
+                    setBranch({
+                      ...branch,
+                      branch_kind: event.target.value as BranchKind,
+                    })
+                  }
+                >
+                  {(
+                    Object.entries(BRANCH_KIND_LABELS) as [BranchKind, string][]
+                  ).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="ตัวอย่างเลขที่บิล">
+                <input
+                  readOnly
+                  value={
+                    branch.document_code
+                      ? `${billNumberPrefix(branch.document_code)}000001`
+                      : ""
+                  }
+                  placeholder="กำหนดรหัสออกบิลก่อน"
+                />
+              </Field>
+            </div>
+            <p className="settings-note">
+              เมื่อสาขาออกบิลครั้งแรกแล้ว รหัสออกบิลจะถูกล็อก
+              เพื่อไม่ให้เลขเอกสารเก่าเปลี่ยนความหมาย
+            </p>
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={branch.can_issue_bills}
+                onChange={(event) =>
+                  setBranch({
+                    ...branch,
+                    can_issue_bills: event.target.checked,
+                  })
+                }
+              />
+              สาขานี้ออกบิลได้
+            </label>
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={branch.is_active}
+                onChange={(event) =>
+                  setBranch({ ...branch, is_active: event.target.checked })
+                }
+              />
+              เปิดใช้งานสาขา
+            </label>
+            <div className="modal-footer">
+              <Button className="primary" type="submit" busy={busy}>
+                บันทึกสาขา
+              </Button>
+            </div>
+          </form>
+        </Modal>
       )}
       {zone && (
         <Modal

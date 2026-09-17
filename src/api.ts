@@ -11,6 +11,8 @@ import type {
   StaffInvite,
   DashboardStats,
   LoadingQueueRecord,
+  Item,
+  CompanyBranch,
 } from "./types";
 
 export const supabase = createClient(
@@ -35,7 +37,13 @@ export async function getProfile(id: string): Promise<Profile | null> {
   return r.data;
 }
 export async function getMasters() {
-  const [zones, products, rules] = await Promise.all([
+  const [branches, zones, products, rules] = await Promise.all([
+    supabase
+      .from("branches")
+      .select(
+        "id,code,document_code,name,branch_kind,province_name,can_issue_bills,is_active,document_code_locked_at",
+      )
+      .order("code"),
     supabase
       .from("service_zones")
       .select("*,districts(*)")
@@ -49,6 +57,7 @@ export async function getMasters() {
       .limit(500),
   ]);
   return {
+    branches: check(branches) as CompanyBranch[],
     zones: (check(zones) as Zone[]).map((zone) => ({
       ...zone,
       districts: zone.districts.filter(
@@ -82,11 +91,24 @@ export async function searchParties(
 export async function listShipments(
   options: {
     date?: string;
+    dateFrom?: string;
+    dateTo?: string;
     search?: string;
     zone?: string;
+    district?: string;
+    branch?: string;
+    receiverId?: string;
+    senderId?: string;
+    catalogId?: string;
+    unit?: string;
+    payment?: string;
+    openedBy?: string;
+    priceState?: "PENDING" | "PRICED" | "";
+    paymentState?: "PAID" | "PARTIAL" | "UNPAID" | "";
     status?: string;
     unpaid?: boolean;
     page?: number;
+    pageSize?: number;
   } = {},
 ): Promise<{ rows: Shipment[]; count: number }> {
   let q = supabase
@@ -100,6 +122,26 @@ export async function listShipments(
     q = q
       .gte("received_at", start.toISOString())
       .lt("received_at", end.toISOString());
+  }
+  if (options.dateFrom) {
+    const start = new Date(options.dateFrom + "T00:00:00+07:00");
+    q = q.gte("received_at", start.toISOString());
+  }
+  if (options.dateTo) {
+    const end = new Date(options.dateTo + "T00:00:00+07:00");
+    end.setDate(end.getDate() + 1);
+    q = q.lt("received_at", end.toISOString());
+  }
+  const itemShipmentIds = new Set<string>();
+  if (options.catalogId || options.unit) {
+    let itemQuery = supabase.from("shipment_items").select("shipment_id");
+    if (options.catalogId)
+      itemQuery = itemQuery.eq("product_unit_id", options.catalogId);
+    if (options.unit) itemQuery = itemQuery.eq("unit", options.unit);
+    const matches = await itemQuery.limit(5000);
+    if (matches.error) throw matches.error;
+    for (const row of matches.data || []) itemShipmentIds.add(row.shipment_id);
+    if (!itemShipmentIds.size) return { rows: [], count: 0 };
   }
   if (options.search && clean(options.search)) {
     const s = clean(options.search);
@@ -117,12 +159,52 @@ export async function listShipments(
       `shipment_no.ilike.%${s}%,sender_snapshot->>display_name.ilike.%${s}%,receiver_snapshot->>display_name.ilike.%${s}%,sender_snapshot->>phone.ilike.%${s}%,receiver_snapshot->>phone.ilike.%${s}%${itemFilter}`,
     );
   }
+  if (itemShipmentIds.size) q = q.in("id", [...itemShipmentIds]);
   if (options.zone) q = q.eq("zone_id", options.zone);
+  if (options.district) q = q.eq("district_id", options.district);
+  if (options.branch) q = q.eq("destination_branch_code", options.branch);
+  if (options.receiverId) q = q.eq("receiver_party_id", options.receiverId);
+  if (options.senderId) q = q.eq("sender_party_id", options.senderId);
+  if (options.payment) q = q.eq("payment_mode", options.payment);
+  if (options.openedBy) q = q.eq("opened_by_employee_id", options.openedBy);
+  if (options.priceState === "PENDING") q = q.eq("price_pending", true);
+  if (options.priceState === "PRICED") q = q.eq("price_pending", false);
+  if (options.paymentState === "PAID") q = q.eq("outstanding_amount", 0);
+  if (options.paymentState === "PARTIAL")
+    q = q.gt("paid_amount", 0).gt("outstanding_amount", 0);
+  if (options.paymentState === "UNPAID")
+    q = q.eq("paid_amount", 0).gt("outstanding_amount", 0);
   if (options.status) q = q.eq("shipment_status", options.status);
   if (options.unpaid) q = q.gt("outstanding_amount", 0);
   const page = options.page || 0;
-  const r = await q.range(page * 50, page * 50 + 49);
-  return { rows: check(r) as Shipment[], count: r.count || 0 };
+  const pageSize = options.pageSize || 50;
+  const r = await q.range(page * pageSize, page * pageSize + pageSize - 1);
+  const rows = check(r) as Shipment[];
+  if (!rows.length) return { rows, count: r.count || 0 };
+  const items = await supabase
+    .from("shipment_items")
+    .select("*")
+    .in(
+      "shipment_id",
+      rows.map((row) => row.id),
+    )
+    .order("line_no");
+  if (items.error) throw items.error;
+  const byShipment = (items.data || []).reduce<Record<string, unknown[]>>(
+    (groups, item) => {
+      const id = String(item.shipment_id);
+      (groups[id] ||= []).push(item);
+      return groups;
+    },
+    {},
+  );
+  return {
+    rows: rows.map((row) => ({
+      ...row,
+      items: (byShipment[row.id] || []) as Item[],
+    })),
+    count: r.count || 0,
+  };
 }
 export async function getLoadingQueue(): Promise<LoadingQueueRecord[]> {
   const rows: LoadingQueueRecord[] = [];
@@ -198,7 +280,12 @@ export async function getStats(date: string): Promise<DashboardStats> {
   return check(await supabase.rpc("reception_stats", { day: date }));
 }
 export async function setting(kind: string, data: unknown) {
-  const r = await supabase.rpc("manage_setting", { kind, data });
+  const r = kind.startsWith("branch_")
+    ? await supabase.rpc("manage_branch_setting", {
+        action: kind === "branch_save" ? "save" : "delete",
+        data,
+      })
+    : await supabase.rpc("manage_setting", { kind, data });
   if (r.error) throw r.error;
 }
 export async function getStaff(): Promise<StaffInvite[]> {

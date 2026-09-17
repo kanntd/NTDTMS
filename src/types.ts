@@ -10,6 +10,18 @@ export type ModuleKey =
   | "reports"
   | "settings";
 export type ModulePermissions = Partial<Record<ModuleKey, boolean>>;
+export type BranchKind = "ORIGIN" | "DESTINATION" | "BOTH" | "HUB" | "ADMIN";
+export interface CompanyBranch {
+  id: string;
+  code: string;
+  document_code: string;
+  name: string;
+  branch_kind: BranchKind;
+  province_name: string;
+  can_issue_bills: boolean;
+  is_active: boolean;
+  document_code_locked_at?: string | null;
+}
 export interface Zone {
   id: string;
   name: string;
@@ -112,8 +124,16 @@ export interface Shipment {
   invoice_id: string;
   due_date: string;
   created_by: string;
+  sender_party_id?: string;
+  receiver_party_id?: string;
+  opened_by_employee_id?: string;
   destination_branch_code?: string;
   price_pending?: boolean;
+  manifest_no?: string;
+  loaded_at?: string;
+  vehicle_plate_no?: string;
+  driver_name?: string;
+  delivered_at?: string;
   items?: Item[];
 }
 export interface ShipmentDetail extends Shipment {
@@ -192,7 +212,7 @@ export const ROLE_LABELS: Record<Role, string> = {
 
 export const MODULE_LABELS: Record<ModuleKey, string> = {
   intake: "รับสินค้าและออกบิล",
-  shipments: "รายการขนส่ง",
+  shipments: "ค้นหาและติดตามบิล",
   master_data: "ข้อมูลหลัก",
   pricing: "ราคาและคำขอราคา",
   finance: "รับชำระและยอดค้าง",

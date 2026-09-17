@@ -149,6 +149,13 @@ export function receptionBillToShipment(
     invoice_id: `local-${bill.id}`,
     due_date: bill.billingPeriod?.end || localDate(new Date(bill.date)),
     created_by: bill.openedBy?.employeeId || "demo",
+    sender_party_id: bill.sender.id,
+    receiver_party_id: bill.receiver.id,
+    opened_by_employee_id: bill.openedBy?.employeeId || "",
+    manifest_no: bill.load?.manifestNo,
+    loaded_at: bill.load?.confirmedAt,
+    vehicle_plate_no: bill.load?.vehicleNo,
+    driver_name: bill.load?.driverName,
     items: bill.items.map((item) => ({
       id: item.id,
       product_id: item.catalogId,

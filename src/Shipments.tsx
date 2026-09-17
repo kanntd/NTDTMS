@@ -19,8 +19,20 @@ import {
   type Item,
 } from "./types";
 import Receipt from "./Receipt";
+import ShipmentTracking from "./ShipmentTracking";
 
 export default function Shipments({
+  finance = false,
+  initialSearch = "",
+}: {
+  finance?: boolean;
+  initialSearch?: string;
+}) {
+  if (!finance) return <ShipmentTracking initialSearch={initialSearch} />;
+  return <ShipmentRegister finance initialSearch={initialSearch} />;
+}
+
+function ShipmentRegister({
   finance = false,
   initialSearch = "",
 }: {

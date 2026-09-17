@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Printer,
@@ -170,10 +170,12 @@ export default function Receipt({
   shipment,
   onClose,
   draft = false,
+  autoPrint = false,
 }: {
   shipment: ShipmentDetail;
   onClose: () => void;
   draft?: boolean;
+  autoPrint?: boolean;
 }) {
   const w = useWorkspace(),
     [s, setS] = useState(shipment),
@@ -184,6 +186,11 @@ export default function Receipt({
     [method, setMethod] = useState("CASH"),
     [reference, setReference] = useState(""),
     [request, setRequest] = useState(() => crypto.randomUUID());
+  useEffect(() => {
+    if (!autoPrint) return;
+    const timer = window.setTimeout(() => window.print(), 120);
+    return () => window.clearTimeout(timer);
+  }, [autoPrint]);
   const canWrite = ["owner", "admin", "clerk"].includes(w.profile.role),
     canCollect = [...["owner", "admin", "clerk"], "accountant"].includes(
       w.profile.role,

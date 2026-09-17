@@ -31,6 +31,7 @@ export function createService(demo: boolean) {
     masters: async () =>
       demo
         ? {
+            branches: loadDemo().branches,
             zones: loadDemo().zones,
             products: demoProducts,
             rules: loadDemo().rules,
@@ -52,10 +53,36 @@ export function createService(demo: boolean) {
       if (!demo) return api.listShipments(options);
       const o = options || {};
       const all = allDemoShipments()
-        .filter(
-          (s) =>
-            (!o.date || localDate(new Date(s.received_at)) === o.date) &&
+        .filter((s) => {
+          const received = localDate(new Date(s.received_at));
+          return (
+            (!o.date || received === o.date) &&
+            (!o.dateFrom || received >= o.dateFrom) &&
+            (!o.dateTo || received <= o.dateTo) &&
             (!o.zone || s.zone_id === o.zone) &&
+            (!o.district || s.district_id === o.district) &&
+            (!o.branch || s.destination_branch_code === o.branch) &&
+            (!o.receiverId ||
+              s.receiver_party_id === o.receiverId ||
+              s.receiver_snapshot.id === o.receiverId) &&
+            (!o.senderId ||
+              s.sender_party_id === o.senderId ||
+              s.sender_snapshot.id === o.senderId) &&
+            (!o.catalogId ||
+              s.items?.some((item) => item.product_id === o.catalogId)) &&
+            (!o.unit || s.items?.some((item) => item.unit === o.unit)) &&
+            (!o.payment || s.payment_mode === o.payment) &&
+            (!o.openedBy || s.opened_by_employee_id === o.openedBy) &&
+            (!o.priceState ||
+              (o.priceState === "PENDING"
+                ? s.price_pending
+                : !s.price_pending)) &&
+            (!o.paymentState ||
+              (o.paymentState === "PAID"
+                ? s.outstanding_amount === 0
+                : o.paymentState === "PARTIAL"
+                  ? s.paid_amount > 0 && s.outstanding_amount > 0
+                  : s.paid_amount === 0 && s.outstanding_amount > 0)) &&
             (!o.status || s.shipment_status === o.status) &&
             (!o.unpaid || s.outstanding_amount > 0) &&
             (!o.search ||
@@ -72,13 +99,15 @@ export function createService(demo: boolean) {
                   : "")
               )
                 .toLowerCase()
-                .includes(o.search.toLowerCase())),
-        )
+                .includes(o.search.toLowerCase()))
+          );
+        })
         .sort((a, b) => +new Date(b.received_at) - +new Date(a.received_at));
+      const pageSize = o.pageSize || 50;
       return {
         rows: all.slice(
-          (o.page || 0) * 50,
-          (o.page || 0) * 50 + 50,
+          (o.page || 0) * pageSize,
+          (o.page || 0) * pageSize + pageSize,
         ) as Shipment[],
         count: all.length,
       };
@@ -256,6 +285,51 @@ export function createService(demo: boolean) {
       }
       if (kind === "zone_delete")
         state.zones = state.zones.filter((zone) => zone.id !== data.id);
+      if (kind === "branch_save") {
+        const id = String(data.id);
+        const previous = state.branches.find((branch) => branch.id === id);
+        if (
+          previous?.document_code_locked_at &&
+          previous.document_code !== String(data.document_code)
+        )
+          throw new Error("รหัสออกบิลถูกใช้งานแล้ว จึงเปลี่ยนไม่ได้");
+        if (
+          state.branches.some(
+            (branch) =>
+              branch.id !== id &&
+              branch.document_code.toUpperCase() ===
+                String(data.document_code).toUpperCase(),
+          )
+        )
+          throw new Error("รหัสออกบิลนี้ถูกใช้โดยสาขาอื่นแล้ว");
+        const value = {
+          id,
+          code: String(data.code).toUpperCase(),
+          document_code: String(data.document_code).toUpperCase(),
+          name: String(data.name),
+          branch_kind:
+            data.branch_kind as (typeof state.branches)[number]["branch_kind"],
+          province_name: String(data.province_name),
+          can_issue_bills: Boolean(data.can_issue_bills),
+          is_active: Boolean(data.is_active),
+          document_code_locked_at: previous?.document_code_locked_at || null,
+        };
+        const index = state.branches.findIndex((branch) => branch.id === id);
+        if (index >= 0) state.branches[index] = value;
+        else state.branches.push(value);
+      }
+      if (kind === "branch_delete") {
+        const branch = state.branches.find((row) => row.id === data.id);
+        if (branch) {
+          branch.is_active = false;
+          branch.can_issue_bills = false;
+        }
+      }
+      if (kind === "branch_lock") {
+        const branch = state.branches.find((row) => row.id === data.id);
+        if (branch && !branch.document_code_locked_at)
+          branch.document_code_locked_at = new Date().toISOString();
+      }
       if (kind === "zone") {
         const z = state.zones.find((z) => z.id === data.id)!;
         z.name = String(data.name);

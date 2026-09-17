@@ -2076,11 +2076,23 @@ function BranchSelect({
   onChange: (value: string) => void;
   includeBkk?: boolean;
 }) {
+  const { branches } = useWorkspace();
+  const choices = branches.length
+    ? branches.filter(
+        (branch) =>
+          branch.is_active &&
+          (includeBkk ||
+            branch.branch_kind === "DESTINATION" ||
+            branch.branch_kind === "BOTH"),
+      )
+    : [
+        ...(includeBkk ? [{ code: "BKK", name: "กรุงเทพฯ" }] : []),
+        ...BRANCH_OPTIONS,
+      ];
   return (
     <select required value={value} onChange={(e) => onChange(e.target.value)}>
       <option value="">เลือกสาขา</option>
-      {includeBkk && <option value="BKK">กรุงเทพฯ</option>}
-      {BRANCH_OPTIONS.map((branch) => (
+      {choices.map((branch) => (
         <option key={branch.code} value={branch.code}>
           {branch.name}
         </option>

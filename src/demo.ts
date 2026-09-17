@@ -1,4 +1,5 @@
 import type {
+  CompanyBranch,
   Item,
   Party,
   PriceRule,
@@ -50,10 +51,68 @@ export const demoZones: Zone[] = [
 export const demoProducts: Product[] = [];
 export const demoRules: PriceRule[] = [];
 export const demoParties: Party[] = [];
+export const demoBranches: CompanyBranch[] = [
+  {
+    id: "branch-bkk",
+    code: "BKK",
+    document_code: "B01",
+    name: "กรุงเทพฯ สาขา 1",
+    branch_kind: "ORIGIN",
+    province_name: "กรุงเทพมหานคร",
+    can_issue_bills: true,
+    is_active: true,
+    document_code_locked_at: null,
+  },
+  {
+    id: "branch-kpt",
+    code: "KPT",
+    document_code: "K01",
+    name: "สาขากำแพงเพชร",
+    branch_kind: "DESTINATION",
+    province_name: "กำแพงเพชร",
+    can_issue_bills: false,
+    is_active: true,
+    document_code_locked_at: null,
+  },
+  {
+    id: "branch-plk",
+    code: "PLK",
+    document_code: "P01",
+    name: "สาขาพิษณุโลก",
+    branch_kind: "DESTINATION",
+    province_name: "พิษณุโลก",
+    can_issue_bills: false,
+    is_active: true,
+    document_code_locked_at: null,
+  },
+  {
+    id: "branch-sti",
+    code: "STI",
+    document_code: "S01",
+    name: "สาขาสุโขทัย",
+    branch_kind: "DESTINATION",
+    province_name: "สุโขทัย",
+    can_issue_bills: false,
+    is_active: true,
+    document_code_locked_at: null,
+  },
+  {
+    id: "branch-swl",
+    code: "SWL",
+    document_code: "W01",
+    name: "สาขาสวรรคโลก",
+    branch_kind: "DESTINATION",
+    province_name: "สุโขทัย",
+    can_issue_bills: false,
+    is_active: true,
+    document_code_locked_at: null,
+  },
+];
 
 export interface DemoState {
   shipments: ShipmentDetail[];
   parties: Party[];
+  branches: CompanyBranch[];
   zones: Zone[];
   rules: PriceRule[];
 }
@@ -61,7 +120,13 @@ const key = "ntdtms-demo-v3";
 export function loadDemo(): DemoState {
   try {
     const v = JSON.parse(localStorage.getItem(key) || "null");
-    if (v && Array.isArray(v.shipments) && Array.isArray(v.zones)) return v;
+    if (v && Array.isArray(v.shipments) && Array.isArray(v.zones))
+      return {
+        ...v,
+        branches: Array.isArray(v.branches)
+          ? v.branches
+          : structuredClone(demoBranches),
+      };
   } catch {
     /* A corrupt demo snapshot can be reset without affecting business data. */
   }
@@ -69,6 +134,7 @@ export function loadDemo(): DemoState {
   const state = {
     shipments,
     parties: structuredClone(demoParties),
+    branches: structuredClone(demoBranches),
     zones: structuredClone(demoZones),
     rules: structuredClone(demoRules),
   };

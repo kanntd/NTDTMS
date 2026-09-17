@@ -28,6 +28,7 @@ import {
   ROLE_LABELS,
   ROLE_MODULE_DEFAULTS,
   type ModuleKey,
+  type CompanyBranch,
   type Profile,
   type Product,
   type PriceRule,
@@ -71,10 +72,11 @@ export default function App() {
     [loadBranch, setLoadBranch] = useState(""),
     [revision, setRevision] = useState(0),
     [masters, setMasters] = useState<{
+      branches: CompanyBranch[];
       zones: Zone[];
       products: Product[];
       rules: PriceRule[];
-    }>({ zones: [], products: [], rules: [] }),
+    }>({ branches: [], zones: [], products: [], rules: [] }),
     [masterError, setMasterError] = useState(""),
     [notice, setNotice] = useState<{ message: string; error: boolean } | null>(
       null,
@@ -220,7 +222,7 @@ export default function App() {
       }
     }
     setProfile(null);
-    setMasters({ zones: [], products: [], rules: [] });
+    setMasters({ branches: [], zones: [], products: [], rules: [] });
     setAuthError("");
   }
   if (!ready && !demo) return <Loading />;
@@ -244,6 +246,11 @@ export default function App() {
     );
   }
   const manager = ["owner", "admin"].includes(profile.role);
+  const currentBranch =
+    masters.branches.find((branch) => branch.id === profile.branch_id) ||
+    masters.branches.find(
+      (branch) => branch.is_active && branch.can_issue_bills,
+    );
   const canOpen = (module: ModuleKey) =>
     profile.role === "owner" ||
     (profile.module_permissions?.[module] ??
@@ -266,7 +273,13 @@ export default function App() {
       ? [{ id: "loading", label: "งานขึ้นรถ", Icon: PackageCheck }]
       : []),
     ...(canOpen("shipments")
-      ? [{ id: "shipments", label: "รายการขนส่ง", Icon: ListOrdered }]
+      ? [
+          {
+            id: "shipments",
+            label: "ค้นหาและติดตามบิล",
+            Icon: ListOrdered,
+          },
+        ]
       : []),
     ...(canOpen("master_data")
       ? [
@@ -309,8 +322,12 @@ export default function App() {
               <MapPin size={17} />
             </span>
             <div>
-              <strong>สำนักงานใหญ่</strong>
-              <small>กรุงเทพมหานคร</small>
+              <strong>{currentBranch?.name || "สำนักงานใหญ่"}</strong>
+              <small>
+                {currentBranch
+                  ? `${currentBranch.document_code} · ${currentBranch.province_name}`
+                  : "กรุงเทพมหานคร"}
+              </small>
             </div>
             <ChevronDown size={14} />
           </div>

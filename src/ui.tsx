@@ -207,17 +207,19 @@ export function Loading() {
 export function Pagination({
   count,
   page,
+  pageSize = 50,
   onChange,
 }: {
   count: number;
   page: number;
+  pageSize?: number;
   onChange: (n: number) => void;
 }) {
   return (
     <div className="pagination">
       <span>
         {count
-          ? `${page * 50 + 1}–${Math.min(page * 50 + 50, count)} จาก ${count} รายการ`
+          ? `${page * pageSize + 1}–${Math.min(page * pageSize + pageSize, count)} จาก ${count} รายการ`
           : "0 รายการ"}
       </span>
       <div>
@@ -231,7 +233,7 @@ export function Pagination({
         <span>{page + 1}</span>
         <IconButton
           label="หน้าถัดไป"
-          disabled={(page + 1) * 50 >= count}
+          disabled={(page + 1) * pageSize >= count}
           onClick={() => onChange(page + 1)}
         >
           <ChevronRight size={17} />

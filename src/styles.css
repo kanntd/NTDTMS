@@ -1856,6 +1856,197 @@ table {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
 }
+.shipment-search-panel {
+  padding: 18px 22px 17px;
+  background: #fff;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.shipment-search-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+.shipment-keyword {
+  width: min(560px, 100%);
+  min-height: 42px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #c9d7d0;
+  border-radius: 5px;
+  color: #6b7c73;
+  background: #fff;
+}
+.shipment-keyword input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 0;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+}
+.shipment-search-summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  white-space: nowrap;
+}
+.shipment-search-summary strong {
+  color: #355b4b;
+  font-size: 14px;
+}
+.shipment-search-summary > span {
+  color: #809187;
+  font-size: 12px;
+}
+.shipment-search-summary .button {
+  min-height: 38px;
+  padding: 7px 11px;
+}
+.shipment-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 11px;
+  align-items: end;
+}
+.shipment-filter-control {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+.shipment-filter-control > span {
+  color: #5d7066;
+  font-size: 12px;
+  font-weight: 600;
+}
+.shipment-filter-control > select,
+.shipment-filter-control > input,
+.shipment-filter-picker > button {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 7px 10px;
+  border: 1px solid #c9d7d0;
+  border-radius: 5px;
+  background: #fff;
+  color: #304a40;
+  font: inherit;
+  font-size: 13px;
+}
+.shipment-filter-picker > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+.shipment-filter-picker > button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shipment-filter-menu {
+  position: absolute;
+  z-index: 25;
+  top: calc(100% + 5px);
+  left: 0;
+  width: max(100%, 260px);
+  max-height: 310px;
+  padding: 6px;
+  overflow: auto;
+  border: 1px solid #c9d7d0;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgb(37 69 55 / 14%);
+}
+.shipment-filter-menu > label {
+  position: sticky;
+  z-index: 1;
+  top: -6px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  background: #fff;
+  border-bottom: 1px solid #e6ece8;
+}
+.shipment-filter-menu input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+}
+.shipment-filter-menu > button {
+  width: 100%;
+  padding: 8px;
+  display: grid;
+  gap: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #304a40;
+  text-align: left;
+  cursor: pointer;
+}
+.shipment-filter-menu > button:hover,
+.shipment-filter-menu > button.selected {
+  background: #ecf8f3;
+}
+.shipment-filter-menu small {
+  color: #829288;
+  font-size: 11px;
+}
+.shipment-filter-menu > p {
+  padding: 12px 8px;
+  margin: 0;
+  color: #829288;
+  font-size: 12px;
+}
+.shipment-filter-note {
+  margin: 13px 0 0;
+  color: #7b8d83;
+  font-size: 12px;
+}
+.shipment-tracking-register {
+  margin-top: 14px;
+}
+.shipment-tracking-table {
+  min-width: 1500px;
+}
+.shipment-tracking-table td {
+  vertical-align: top;
+}
+.shipment-tracking-table th:nth-child(1) {
+  width: 155px;
+}
+.shipment-tracking-table th:nth-child(2) {
+  width: 200px;
+}
+.shipment-tracking-table th:nth-child(3) {
+  width: 235px;
+}
+.shipment-tracking-table th:nth-child(5),
+.shipment-tracking-table th:nth-child(6) {
+  width: 165px;
+}
+.shipment-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.shipment-tracking-table .success-text {
+  color: #147855;
+}
+.shipment-tracking-table .warning-text {
+  color: #9b6813;
+}
 .register-tabs {
   display: flex;
   gap: 23px;
@@ -2103,6 +2294,15 @@ table {
 }
 .settings-section > h2 {
   margin-bottom: 20px;
+}
+.branch-table strong,
+.branch-table small {
+  display: block;
+}
+.document-code {
+  font-family: Arial, sans-serif;
+  color: var(--green);
+  letter-spacing: 0;
 }
 .zone-setting {
   display: flex;

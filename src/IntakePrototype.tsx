@@ -18,6 +18,8 @@ import { useWorkspace } from "./context";
 import { money, thaiDate } from "./domain";
 import { BRANCH_OPTIONS, agreedPrice } from "./intakeData";
 import { intakeAmounts, onePercent } from "./intakeMath";
+import { refreshDraftLinePrice } from "./intakeDraftPrice";
+import { nextLocalBillNumber } from "./billNumber";
 import IntakeEntryForm, { MeasurementFields } from "./IntakeEntryForm";
 import {
   monthlyBillingPeriod,
@@ -52,6 +54,7 @@ type Line = Measurements & {
   quantity: number;
   price: number | null;
   requestPrice: boolean;
+  priceTouched: boolean;
 };
 type Draft = {
   openedByEmployeeId: string;
@@ -109,6 +112,7 @@ const blankLine = (): Line => ({
   quantity: 1,
   price: null,
   requestPrice: false,
+  priceTouched: false,
 });
 const blank = (openedByEmployeeId = ""): Draft => ({
   openedByEmployeeId,
@@ -183,6 +187,7 @@ function load(): State {
           lines: stored.drafts.lines.map((row) => ({
             ...row,
             requestPrice: row.requestPrice ?? row.price === null,
+            priceTouched: row.priceTouched ?? row.price !== null,
           })),
         },
       };
@@ -451,7 +456,7 @@ export default function IntakePrototype() {
   useEffect(() => {
     setState((current) => ({
       ...current,
-      drafts: reprice(current.drafts),
+      drafts: refreshUntouchedPrices(current.drafts),
     }));
   }, [operations]);
   const receiver = state.parties.find((p) => p.id === f.receiverId);
@@ -468,6 +473,7 @@ export default function IntakePrototype() {
     code: loginEmployee?.code || "บัญชีผู้ใช้",
     name: loginEmployee?.name || w.profile.display_name,
     nickname: loginEmployee?.nickname || "",
+    branch: loginEmployee?.branch || "",
   };
   const openerChoices = [
     loginOpener,
@@ -480,6 +486,10 @@ export default function IntakePrototype() {
   const opener = openerChoices.find(
     (employee) => employee.id === f.openedByEmployeeId,
   );
+  const originBranch =
+    w.branches.find((row) => row.id === w.profile.branch_id) ||
+    w.branches.find((row) => row.code === loginOpener.branch) ||
+    w.branches.find((row) => row.is_active && row.can_issue_bills);
   useEffect(() => {
     setState((current) => ({
       ...current,
@@ -561,9 +571,41 @@ export default function IntakePrototype() {
           ...row,
           price: nextPrice,
           requestPrice: !!key && !!pendingPriceRequest(operations, key),
+          priceTouched: false,
         };
       }),
     };
+  }
+  function refreshUntouchedPrices(next: Draft) {
+    return {
+      ...next,
+      lines: next.lines.map((row) => {
+        if (row.priceTouched) return row;
+        const key =
+          next.payment && row.catalogId
+            ? pairRateKey(
+                next.receiverId,
+                next.senderId,
+                row.catalogId,
+                next.payment,
+                next.branch,
+              )
+            : "";
+        const pending = !!key && !!pendingPriceRequest(operations, key);
+        return refreshDraftLinePrice(row, price(row, next), pending);
+      }),
+    };
+  }
+  function addLine() {
+    setState((current) => ({
+      ...current,
+      drafts: {
+        ...current.drafts,
+        collect: false,
+        taxOverride: null,
+        lines: [...current.drafts.lines, blankLine()],
+      },
+    }));
   }
   function selectReceiver(id: string) {
     const next = {
@@ -598,6 +640,7 @@ export default function IntakePrototype() {
                 catalogId: "",
                 price: null,
                 requestPrice: false,
+                priceTouched: false,
                 weight: "",
                 width: "",
                 length: "",
@@ -629,6 +672,7 @@ export default function IntakePrototype() {
                     f.branch,
                   ),
                 ),
+              priceTouched: false,
               weight: state.catalog.find((c) => c.id === id)?.weight || "",
               width: state.catalog.find((c) => c.id === id)?.width || "",
               length: state.catalog.find((c) => c.id === id)?.length || "",
@@ -681,6 +725,18 @@ export default function IntakePrototype() {
     }
     if (!receiver || !sender || !branch) {
       setError("กรุณาเลือกผู้รับ ผู้ส่ง และสาขาปลายทางให้ครบ");
+      return;
+    }
+    if (
+      issue &&
+      (!originBranch ||
+        !originBranch.is_active ||
+        !originBranch.can_issue_bills ||
+        !originBranch.document_code)
+    ) {
+      setError(
+        "สาขาต้นทางยังไม่มีรหัสออกบิล หรือยังไม่ได้เปิดสิทธิ์ออกบิล กรุณาตั้งค่าในหน้าตั้งค่าบริษัท",
+      );
       return;
     }
     if (!f.payment) {
@@ -752,7 +808,10 @@ export default function IntakePrototype() {
     const bill: Bill = {
       id: crypto.randomUUID(),
       number: issue
-        ? `BKK-${String(new Date().getFullYear() + 543).slice(-2)}-${String(state.bills.length + 1).padStart(6, "0")}`
+        ? nextLocalBillNumber(
+            originBranch!.document_code,
+            state.bills.map((row) => row.number),
+          )
         : "ร่าง",
       date: new Date().toISOString(),
       openedBy: {
@@ -968,6 +1027,11 @@ export default function IntakePrototype() {
       }));
       setSenderGlobal(false);
       setProductGlobal({});
+      if (originBranch) {
+        void w.service
+          .setting("branch_lock", { id: originBranch.id })
+          .then(w.refresh);
+      }
       w.toast(`บันทึกบิล ${bill.number}`);
     }
     setError("");
@@ -981,7 +1045,13 @@ export default function IntakePrototype() {
       <header className="desk-heading">
         <div>
           <h1>เปิดบิลรับสินค้า</h1>
-          <span>สำนักงานใหญ่ กรุงเทพฯ · {thaiDate(new Date())}</span>
+          <span>
+            {originBranch
+              ? `${originBranch.name} · ${originBranch.document_code}`
+              : "ยังไม่ได้ตั้งค่าสาขาต้นทาง"}
+            {" · "}
+            {thaiDate(new Date())}
+          </span>
         </div>
         <div className="desk-heading-actions">
           <Field label="ผู้เปิดบิล" required>
@@ -1182,8 +1252,7 @@ export default function IntakePrototype() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
-                        const next = blankLine();
-                        patch({ lines: [...f.lines, next] });
+                        addLine();
                         requestAnimationFrame(() => {
                           const all =
                             formRef.current?.querySelectorAll<HTMLInputElement>(
@@ -1215,6 +1284,7 @@ export default function IntakePrototype() {
                                       ? null
                                       : Number(e.target.value),
                                   requestPrice: false,
+                                  priceTouched: e.target.value !== "",
                                 }
                               : l,
                           ),
@@ -1238,6 +1308,7 @@ export default function IntakePrototype() {
                                     price: e.target.checked
                                       ? null
                                       : price(row, f),
+                                    priceTouched: false,
                                   }
                                 : l,
                             ),
@@ -1283,7 +1354,7 @@ export default function IntakePrototype() {
                 type="button"
                 className="text-button"
                 disabled={!sender || f.lines.length >= 100}
-                onClick={() => patch({ lines: [...f.lines, blankLine()] })}
+                onClick={addLine}
               >
                 <Plus size={16} />
                 เพิ่มรายการ
@@ -1535,6 +1606,7 @@ export default function IntakePrototype() {
               catalogId: item.id,
               price: enteredPrice,
               requestPrice,
+              priceTouched: enteredPrice !== null && !requestPrice,
               weight: item.weight || "",
               width: item.width || "",
               length: item.length || "",

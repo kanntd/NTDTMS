@@ -1,10 +1,11 @@
 import { createContext, useContext } from "react";
 import type { DataService } from "./service";
-import type { Product, Profile, PriceRule, Zone } from "./types";
+import type { CompanyBranch, Product, Profile, PriceRule, Zone } from "./types";
 export interface Workspace {
   demo: boolean;
   profile: Profile;
   service: DataService;
+  branches: CompanyBranch[];
   zones: Zone[];
   products: Product[];
   rules: PriceRule[];
