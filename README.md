@@ -24,6 +24,19 @@ http://127.0.0.1:5176/?demo=1
 
 โหมด demo ไม่เขียนข้อมูลลง Supabase จริง และเริ่มต้นโดยไม่มีผู้รับ ผู้ส่ง สินค้า พนักงาน หรือรถตัวอย่าง ข้อมูลที่พนักงานกรอกจะเก็บแยกในเบราว์เซอร์ของเครื่องนั้นเพื่อทดลอง workflow และส่งออกข้อมูลหลักภายหลัง
 
+## ทำงานจากเครื่องอื่นผ่าน Cloud
+
+โปรเจกต์รองรับ GitHub Codespaces แล้ว เปิด repository บน GitHub แล้วเลือก
+`Code` > `Codespaces` > `Create codespace on main` ระบบจะติดตั้ง Node.js และ dependencies ให้อัตโนมัติ
+
+ก่อนเปิด Codespace สำหรับใช้งานข้อมูลจริง ให้เพิ่ม Codespaces secrets ของ repository:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PUBLISHABLE_KEY`
+
+เริ่มเว็บด้วย `pnpm dev` แล้ว Codespaces จะเปิดหน้าเว็บที่ port `5176` ให้โดยอัตโนมัติ
+ถ้ายังไม่ได้เพิ่ม secrets สามารถใช้โหมดทดลองที่ `/?demo=1` ได้
+
 ## ใช้งานจริง
 
 1. เปิดเว็บแบบไม่ใส่ `?demo=1`
