@@ -5,6 +5,7 @@
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
   "postCreateCommand": "corepack enable && corepack prepare pnpm@10.15.1 --activate && pnpm install --frozen-lockfile && node .devcontainer/setup-env.mjs",
+  "postStartCommand": "nohup pnpm dev > /tmp/ntdtms-vite.log 2>&1 &",
   "forwardPorts": [5176],
   "portsAttributes": {
     "5176": {
