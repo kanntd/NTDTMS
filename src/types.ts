@@ -76,6 +76,8 @@ export interface Item {
   width?: number | null;
   length?: number | null;
   height?: number | null;
+  original_quantity?: number;
+  loaded_quantity?: number;
 }
 export interface PartySnapshot {
   id?: string;
@@ -194,8 +196,10 @@ export interface LoadingQueueRecord {
   zone_id: string;
   district_id: string;
   destination_branch_code?: string;
+  payment_mode: PaymentMode;
   total_amount: number;
   total_quantity: number;
+  total_weight: number;
   shipment_status: Shipment["shipment_status"];
   price_pending?: boolean;
   items: Item[];
@@ -207,6 +211,51 @@ export interface LoadConfirmation {
   driverId: string;
   driverName: string;
   confirmedAt: string;
+  destinationBranchCode: string;
+  allocations: Array<{
+    shipmentId: string;
+    itemId: string;
+    quantity: number;
+  }>;
+}
+export type LoadTripStatus =
+  "DRAFT" | "LOADED" | "DEPARTED" | "RECEIVED" | "CANCELLED";
+export interface LoadTripAllocation {
+  id: string;
+  shipmentId: string;
+  shipmentNo: string;
+  itemId: string;
+  description: string;
+  quantity: number;
+  originalQuantity: number;
+  unit: string;
+  receiverName: string;
+  senderName: string;
+  active: boolean;
+}
+export interface LoadTripRecord {
+  id: string;
+  manifestNo: string;
+  status: LoadTripStatus;
+  destinationBranchId: string;
+  destinationBranchCode: string;
+  vehicleId: string;
+  vehicleNo: string;
+  driverId: string;
+  driverName: string;
+  loadedAt: string;
+  departedAt: string;
+  note: string;
+  allocations: LoadTripAllocation[];
+}
+export interface LoadTripUpdate {
+  id: string;
+  action: "UPDATE" | "CANCEL";
+  vehicleId?: string;
+  driverId?: string;
+  driverName?: string;
+  note?: string;
+  allocations?: Array<{ lineId: string; quantity: number }>;
 }
 export interface PriceRule {
   id: string;

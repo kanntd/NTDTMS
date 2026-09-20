@@ -2,6 +2,7 @@ import * as api from "./api";
 import { createDemoShipment, demoProducts, loadDemo, saveDemo } from "./demo";
 import { localDate } from "./domain";
 import { BRANCH_OPTIONS } from "./intakeData";
+import { loadOperations } from "./operationsStore";
 import type {
   DashboardStats,
   Party,
@@ -11,7 +12,14 @@ import type {
   StaffInvite,
 } from "./types";
 import { ROLE_MODULE_DEFAULTS } from "./types";
-import type { LoadConfirmation, LoadingQueueRecord } from "./types";
+import type {
+  LoadConfirmation,
+  LoadingQueueRecord,
+  LoadTripRecord,
+  LoadTripStatus,
+  LoadTripUpdate,
+} from "./types";
+import { applyRecordedLoads } from "./loadingQueue";
 import {
   editStoredReceptionBill,
   readReceptionBills,
@@ -27,6 +35,36 @@ function allDemoShipments() {
     ...local,
     ...loadDemo().shipments.filter((row) => !localIds.has(row.id)),
   ];
+}
+
+const DEMO_LOADS_KEY = "ntdtms-loading-manifests-v2";
+
+type DemoLoad = LoadConfirmation & {
+  id: string;
+  status: LoadTripStatus;
+  note: string;
+  updatedAt: string;
+};
+
+function readDemoLoads(): DemoLoad[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(DEMO_LOADS_KEY) || "[]") as
+      Partial<DemoLoad>[] | null;
+    if (!Array.isArray(value)) return [];
+    return value.map((row) => ({
+      ...(row as LoadConfirmation),
+      id: row.id || crypto.randomUUID(),
+      status: row.status || "DEPARTED",
+      note: row.note || "",
+      updatedAt: row.updatedAt || row.confirmedAt || new Date().toISOString(),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function saveDemoLoads(loads: DemoLoad[]) {
+  localStorage.setItem(DEMO_LOADS_KEY, JSON.stringify(loads));
 }
 
 export function createService(demo: boolean) {
@@ -308,35 +346,246 @@ export function createService(demo: boolean) {
           zone_id: row.zone_id,
           district_id: row.district_id,
           destination_branch_code: row.destination_branch_code,
+          payment_mode: row.payment_mode,
           total_amount: row.total_amount,
           total_quantity: row.total_quantity,
+          total_weight: row.total_weight,
           shipment_status: row.shipment_status,
           price_pending: row.price_pending,
           items: row.items,
         }));
-      return [...local, ...seeded].filter(
-        (row) => row.shipment_status === "RECEIVED",
+      return applyRecordedLoads(
+        [...local, ...seeded],
+        readDemoLoads()
+          .filter((load) => load.status !== "CANCELLED")
+          .flatMap((load) => load.allocations || []),
       );
     },
-    confirmLoad: async (ids: string[], load: LoadConfirmation) => {
+    confirmLoad: async (load: LoadConfirmation) => {
       if (!demo) {
-        await Promise.all(ids.map((id) => api.updateStatus(id, "IN_TRANSIT")));
+        await api.confirmLoad(load);
         return;
       }
+      const previous = readDemoLoads();
+      const loadedByItem = new Map<string, number>();
+      for (const allocation of previous
+        .filter((manifest) => manifest.status !== "CANCELLED")
+        .flatMap((manifest) => manifest.allocations || []))
+        loadedByItem.set(
+          allocation.itemId,
+          (loadedByItem.get(allocation.itemId) || 0) + allocation.quantity,
+        );
+      const sourceRows = [
+        ...receptionLoadingQueue(),
+        ...loadDemo().shipments.map((row): LoadingQueueRecord => ({
+          id: row.id,
+          shipment_no: row.shipment_no,
+          received_at: row.received_at,
+          sender_snapshot: row.sender_snapshot,
+          receiver_snapshot: row.receiver_snapshot,
+          zone_id: row.zone_id,
+          district_id: row.district_id,
+          destination_branch_code: row.destination_branch_code,
+          payment_mode: row.payment_mode,
+          total_amount: row.total_amount,
+          total_quantity: row.total_quantity,
+          total_weight: row.total_weight,
+          shipment_status: row.shipment_status,
+          price_pending: row.price_pending,
+          items: row.items,
+        })),
+      ];
+      for (const allocation of load.allocations) {
+        const item = sourceRows
+          .find((row) => row.id === allocation.shipmentId)
+          ?.items.find((row) => row.id === allocation.itemId);
+        const remaining = item
+          ? item.quantity - (loadedByItem.get(item.id) || 0)
+          : 0;
+        if (
+          !item ||
+          allocation.quantity <= 0 ||
+          allocation.quantity > remaining
+        )
+          throw new Error("จำนวนที่ขึ้นรถมากกว่าจำนวนคงเหลือ");
+      }
       const state = loadDemo();
-      for (const id of ids) {
+      for (const id of new Set(load.allocations.map((row) => row.shipmentId))) {
         if (updateReceptionBillStatus(id, "IN_TRANSIT", load)) continue;
         const shipment = state.shipments.find((row) => row.id === id);
         if (shipment) shipment.shipment_status = "IN_TRANSIT";
       }
-      const manifests = JSON.parse(
-        localStorage.getItem("ntdtms-loading-manifests-v1") || "[]",
+      previous.unshift({
+        ...load,
+        id: crypto.randomUUID(),
+        status: "DEPARTED",
+        note: "",
+        updatedAt: load.confirmedAt,
+      });
+      saveDemoLoads(previous);
+      saveDemo(state);
+    },
+    loadTrips: async (): Promise<LoadTripRecord[]> => {
+      if (!demo) return api.getLoadTrips();
+      const sourceRows = [
+        ...receptionLoadingQueue(),
+        ...loadDemo().shipments.map((row): LoadingQueueRecord => ({
+          id: row.id,
+          shipment_no: row.shipment_no,
+          received_at: row.received_at,
+          sender_snapshot: row.sender_snapshot,
+          receiver_snapshot: row.receiver_snapshot,
+          zone_id: row.zone_id,
+          district_id: row.district_id,
+          destination_branch_code: row.destination_branch_code,
+          payment_mode: row.payment_mode,
+          total_amount: row.total_amount,
+          total_quantity: row.total_quantity,
+          total_weight: row.total_weight,
+          shipment_status: row.shipment_status,
+          price_pending: row.price_pending,
+          items: row.items,
+        })),
+      ];
+      return readDemoLoads().map((load) => ({
+        id: load.id,
+        manifestNo: load.manifestNo,
+        status: load.status,
+        destinationBranchId: "",
+        destinationBranchCode: load.destinationBranchCode,
+        vehicleId: load.vehicleId,
+        vehicleNo: load.vehicleNo,
+        driverId: load.driverId,
+        driverName: load.driverName,
+        loadedAt: load.confirmedAt,
+        departedAt: load.confirmedAt,
+        note: load.note,
+        allocations: load.allocations.flatMap((allocation) => {
+          const shipment = sourceRows.find(
+            (row) => row.id === allocation.shipmentId,
+          );
+          const item = shipment?.items.find(
+            (row) => row.id === allocation.itemId,
+          );
+          if (!shipment || !item) return [];
+          return [
+            {
+              id: `${load.id}:${allocation.itemId}`,
+              shipmentId: shipment.id,
+              shipmentNo: shipment.shipment_no,
+              itemId: item.id,
+              description: item.description,
+              quantity: allocation.quantity,
+              originalQuantity: item.quantity,
+              unit: item.unit,
+              receiverName: shipment.receiver_snapshot.display_name,
+              senderName: shipment.sender_snapshot.display_name,
+              active: load.status !== "CANCELLED",
+            },
+          ];
+        }),
+      }));
+    },
+    updateLoadTrip: async (update: LoadTripUpdate) => {
+      if (!demo) return api.updateLoadTrip(update);
+      const loads = readDemoLoads();
+      const target = loads.find((row) => row.id === update.id);
+      if (!target) throw new Error("ไม่พบเที่ยวรถ");
+      if (target.status === "RECEIVED" || target.status === "CANCELLED")
+        throw new Error("เที่ยวรถนี้แก้ไขไม่ได้แล้ว");
+      const affectedShipmentIds = new Set(
+        target.allocations.map((line) => line.shipmentId),
       );
-      manifests.unshift({ ...load, shipmentIds: ids });
-      localStorage.setItem(
-        "ntdtms-loading-manifests-v1",
-        JSON.stringify(manifests),
+      if (update.action === "CANCEL") target.status = "CANCELLED";
+      else {
+        const quantities = new Map(
+          (update.allocations || []).map((row) => [row.lineId, row.quantity]),
+        );
+        const sourceRows = [
+          ...receptionLoadingQueue(),
+          ...loadDemo().shipments.map((row): LoadingQueueRecord => ({
+            id: row.id,
+            shipment_no: row.shipment_no,
+            received_at: row.received_at,
+            sender_snapshot: row.sender_snapshot,
+            receiver_snapshot: row.receiver_snapshot,
+            zone_id: row.zone_id,
+            district_id: row.district_id,
+            destination_branch_code: row.destination_branch_code,
+            payment_mode: row.payment_mode,
+            total_amount: row.total_amount,
+            total_quantity: row.total_quantity,
+            total_weight: row.total_weight,
+            shipment_status: row.shipment_status,
+            price_pending: row.price_pending,
+            items: row.items,
+          })),
+        ];
+        const loadedElsewhere = new Map<string, number>();
+        for (const load of loads) {
+          if (load.id === target.id || load.status === "CANCELLED") continue;
+          for (const allocation of load.allocations) {
+            loadedElsewhere.set(
+              allocation.itemId,
+              (loadedElsewhere.get(allocation.itemId) || 0) +
+                allocation.quantity,
+            );
+          }
+        }
+        target.allocations = target.allocations.flatMap((allocation) => {
+          const lineId = `${target.id}:${allocation.itemId}`;
+          const quantity = quantities.get(lineId) ?? allocation.quantity;
+          const item = sourceRows
+            .find((row) => row.id === allocation.shipmentId)
+            ?.items.find((row) => row.id === allocation.itemId);
+          const maximum = Math.max(
+            0,
+            (item?.quantity || allocation.quantity) -
+              (loadedElsewhere.get(allocation.itemId) || 0),
+          );
+          if (!Number.isFinite(quantity) || quantity < 0 || quantity > maximum)
+            throw new Error("จำนวนขึ้นรถมากกว่าจำนวนที่ยังจัดขึ้นรถได้");
+          return quantity > 0 ? [{ ...allocation, quantity }] : [];
+        });
+        if (!target.allocations.length)
+          throw new Error("ถ้าต้องการนำออกทั้งหมด กรุณายกเลิกทั้งเที่ยวรถ");
+        target.vehicleId = update.vehicleId || target.vehicleId;
+        target.vehicleNo =
+          loadOperations().vehicles.find((row) => row.id === target.vehicleId)
+            ?.plateNo || target.vehicleNo;
+        target.driverId = update.driverId || target.driverId;
+        target.driverName = update.driverName || target.driverName;
+        target.note = update.note || "";
+      }
+      target.updatedAt = new Date().toISOString();
+      saveDemoLoads(loads);
+
+      const activeShipmentIds = new Set(
+        loads
+          .filter((row) => row.status !== "CANCELLED")
+          .flatMap((row) => row.allocations.map((line) => line.shipmentId)),
       );
+      const allShipmentIds = new Set([
+        ...affectedShipmentIds,
+        ...loads.flatMap((row) =>
+          row.allocations.map((line) => line.shipmentId),
+        ),
+      ]);
+      const state = loadDemo();
+      for (const shipmentId of allShipmentIds) {
+        const current = allDemoShipments().find((row) => row.id === shipmentId);
+        if (
+          current?.shipment_status === "DELIVERED" ||
+          current?.shipment_status === "CANCELLED"
+        )
+          continue;
+        const status = activeShipmentIds.has(shipmentId)
+          ? "IN_TRANSIT"
+          : "RECEIVED";
+        if (updateReceptionBillStatus(shipmentId, status)) continue;
+        const shipment = state.shipments.find((row) => row.id === shipmentId);
+        if (shipment) shipment.shipment_status = status;
+      }
       saveDemo(state);
     },
     setting: async (kind: string, data: Record<string, unknown>) => {

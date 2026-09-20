@@ -14,7 +14,12 @@ import type {
   Item,
   CompanyBranch,
   ShipmentEditInput,
+  LoadConfirmation,
+  LoadTripRecord,
+  LoadTripStatus,
+  LoadTripUpdate,
 } from "./types";
+import { applyRecordedLoads } from "./loadingQueue";
 
 export const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -214,9 +219,9 @@ export async function getLoadingQueue(): Promise<LoadingQueueRecord[]> {
     const result = await supabase
       .from("shipments")
       .select(
-        "id,shipment_no,received_at,sender_snapshot,receiver_snapshot,zone_id,district_id,destination_branch_code,total_amount,total_quantity,shipment_status,price_pending,shipment_items(id,product_id,description,quantity,unit,unit_price,weight,fragile)",
+        "id,shipment_no,received_at,sender_snapshot,receiver_snapshot,zone_id,district_id,destination_branch_code,payment_mode,total_amount,total_quantity,total_weight,shipment_status,price_pending,shipment_items(id,product_id,product_unit_id,description,quantity,unit,unit_price,weight,fragile)",
       )
-      .eq("shipment_status", "RECEIVED")
+      .in("shipment_status", ["RECEIVED", "IN_TRANSIT"])
       .order("received_at", { ascending: true })
       .range(page * 500, page * 500 + 499);
     if (result.error) throw result.error;
@@ -224,6 +229,7 @@ export async function getLoadingQueue(): Promise<LoadingQueueRecord[]> {
       ...row,
       total_amount: Number(row.total_amount) || 0,
       total_quantity: Number(row.total_quantity) || 0,
+      total_weight: Number(row.total_weight) || 0,
       items: (row.shipment_items || []).map((item) => ({
         ...item,
         quantity: Number(item.quantity) || 0,
@@ -231,7 +237,45 @@ export async function getLoadingQueue(): Promise<LoadingQueueRecord[]> {
         weight: Number(item.weight) || 0,
       })),
     })) as unknown as LoadingQueueRecord[];
-    rows.push(...batch);
+    const itemIds = batch.flatMap((row) => row.items.map((item) => item.id));
+    const allocations: Array<{
+      shipmentId: string;
+      itemId: string;
+      quantity: number;
+    }> = [];
+    let allocationTableAvailable = true;
+    for (let start = 0; start < itemIds.length; start += 100) {
+      const allocationResult = await supabase
+        .from("load_manifest_item_lines")
+        .select(
+          "shipment_id,shipment_item_id,quantity,load_manifests!inner(status)",
+        )
+        .eq("is_active", true)
+        .neq("load_manifests.status", "CANCELLED")
+        .in("shipment_item_id", itemIds.slice(start, start + 100));
+      if (allocationResult.error) {
+        if (["42P01", "PGRST205"].includes(allocationResult.error.code || "")) {
+          allocationTableAvailable = false;
+          break;
+        }
+        throw allocationResult.error;
+      }
+      allocations.push(
+        ...(allocationResult.data || []).map((allocation) => ({
+          shipmentId: String(allocation.shipment_id),
+          itemId: String(allocation.shipment_item_id),
+          quantity: Number(allocation.quantity) || 0,
+        })),
+      );
+    }
+    rows.push(
+      ...applyRecordedLoads(
+        allocationTableAvailable
+          ? batch
+          : batch.filter((row) => row.shipment_status === "RECEIVED"),
+        allocations,
+      ),
+    );
     if (batch.length < 500) break;
     page += 1;
   }
@@ -289,6 +333,203 @@ export async function collectPayment(
 export async function updateStatus(doc: string, status: string, reason = "") {
   const r = await supabase.rpc("set_shipment_status", { doc, status, reason });
   if (r.error) throw r.error;
+}
+export async function confirmLoad(load: LoadConfirmation) {
+  const result = await supabase.rpc("create_load_manifest", {
+    data: {
+      manifest_no: load.manifestNo,
+      destination_branch_code: load.destinationBranchCode,
+      vehicle_id: load.vehicleId,
+      driver_employee_id: load.driverId,
+      driver_name: load.driverName,
+      confirmed_at: load.confirmedAt,
+      allocations: load.allocations.map((allocation) => ({
+        shipment_id: allocation.shipmentId,
+        shipment_item_id: allocation.itemId,
+        quantity: allocation.quantity,
+      })),
+    },
+  });
+  if (result.error) throw result.error;
+  return result.data as string;
+}
+export async function getLoadTrips(): Promise<LoadTripRecord[]> {
+  const manifestResult = await supabase
+    .from("load_manifests")
+    .select(
+      "id,manifest_no,status,destination_branch_id,vehicle_id,driver_employee_id,loaded_at,departed_at,note,created_at",
+    )
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (manifestResult.error) throw manifestResult.error;
+  const manifests = manifestResult.data || [];
+  if (!manifests.length) return [];
+
+  const manifestIds = manifests.map((row) => String(row.id));
+  const lineResult = await supabase
+    .from("load_manifest_item_lines")
+    .select(
+      "id,manifest_id,shipment_id,shipment_item_id,quantity,unit_snapshot,is_active",
+    )
+    .in("manifest_id", manifestIds)
+    .order("loaded_at");
+  if (lineResult.error) {
+    if (["42P01", "PGRST205"].includes(lineResult.error.code || "")) return [];
+    throw lineResult.error;
+  }
+  const lines = lineResult.data || [];
+  const shipmentIds = [...new Set(lines.map((row) => String(row.shipment_id)))];
+  const itemIds = [
+    ...new Set(lines.map((row) => String(row.shipment_item_id))),
+  ];
+  const vehicleIds = [
+    ...new Set(
+      manifests.map((row) => String(row.vehicle_id || "")).filter(Boolean),
+    ),
+  ];
+  const driverIds = [
+    ...new Set(
+      manifests
+        .map((row) => String(row.driver_employee_id || ""))
+        .filter(Boolean),
+    ),
+  ];
+  const branchIds = [
+    ...new Set(
+      manifests
+        .map((row) => String(row.destination_branch_id || ""))
+        .filter(Boolean),
+    ),
+  ];
+
+  const [
+    shipmentResult,
+    itemResult,
+    vehicleResult,
+    driverResult,
+    branchResult,
+  ] = await Promise.all([
+    shipmentIds.length
+      ? supabase
+          .from("shipments")
+          .select("id,shipment_no,receiver_snapshot,sender_snapshot")
+          .in("id", shipmentIds)
+      : Promise.resolve({ data: [], error: null }),
+    itemIds.length
+      ? supabase
+          .from("shipment_items")
+          .select("id,description,quantity,unit")
+          .in("id", itemIds)
+      : Promise.resolve({ data: [], error: null }),
+    vehicleIds.length
+      ? supabase
+          .from("vehicle_assets")
+          .select("id,plate_no")
+          .in("id", vehicleIds)
+      : Promise.resolve({ data: [], error: null }),
+    driverIds.length
+      ? supabase
+          .from("employees")
+          .select("id,display_name,nickname")
+          .in("id", driverIds)
+      : Promise.resolve({ data: [], error: null }),
+    branchIds.length
+      ? supabase.from("branches").select("id,code").in("id", branchIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  for (const result of [
+    shipmentResult,
+    itemResult,
+    vehicleResult,
+    driverResult,
+    branchResult,
+  ])
+    if (result.error) throw result.error;
+
+  const shipments = new Map(
+    (shipmentResult.data || []).map((row) => [String(row.id), row]),
+  );
+  const items = new Map(
+    (itemResult.data || []).map((row) => [String(row.id), row]),
+  );
+  const vehicles = new Map(
+    (vehicleResult.data || []).map((row) => [
+      String(row.id),
+      String(row.plate_no || ""),
+    ]),
+  );
+  const drivers = new Map(
+    (driverResult.data || []).map((row) => [
+      String(row.id),
+      String(row.nickname || row.display_name || ""),
+    ]),
+  );
+  const branches = new Map(
+    (branchResult.data || []).map((row) => [
+      String(row.id),
+      String(row.code || ""),
+    ]),
+  );
+
+  return manifests.map((manifest) => {
+    const vehicleId = String(manifest.vehicle_id || "");
+    const driverId = String(manifest.driver_employee_id || "");
+    const destinationBranchId = String(manifest.destination_branch_id || "");
+    return {
+      id: String(manifest.id),
+      manifestNo: String(manifest.manifest_no),
+      status: String(manifest.status) as LoadTripStatus,
+      destinationBranchId,
+      destinationBranchCode: branches.get(destinationBranchId) || "",
+      vehicleId,
+      vehicleNo: vehicles.get(vehicleId) || "",
+      driverId,
+      driverName: drivers.get(driverId) || "",
+      loadedAt: String(manifest.loaded_at || manifest.created_at),
+      departedAt: String(manifest.departed_at || ""),
+      note: String(manifest.note || ""),
+      allocations: lines
+        .filter((line) => String(line.manifest_id) === String(manifest.id))
+        .map((line) => {
+          const shipment = shipments.get(String(line.shipment_id));
+          const item = items.get(String(line.shipment_item_id));
+          const receiver = shipment?.receiver_snapshot as
+            { display_name?: string } | undefined;
+          const sender = shipment?.sender_snapshot as
+            { display_name?: string } | undefined;
+          return {
+            id: String(line.id),
+            shipmentId: String(line.shipment_id),
+            shipmentNo: String(shipment?.shipment_no || ""),
+            itemId: String(line.shipment_item_id),
+            description: String(item?.description || ""),
+            quantity: Number(line.quantity) || 0,
+            originalQuantity: Number(item?.quantity) || 0,
+            unit: String(line.unit_snapshot || item?.unit || ""),
+            receiverName: String(receiver?.display_name || ""),
+            senderName: String(sender?.display_name || ""),
+            active: Boolean(line.is_active),
+          };
+        }),
+    };
+  });
+}
+export async function updateLoadTrip(update: LoadTripUpdate) {
+  const result = await supabase.rpc("update_load_manifest", {
+    data: {
+      id: update.id,
+      action: update.action,
+      vehicle_id: update.vehicleId || "",
+      driver_employee_id: update.driverId || "",
+      driver_name: update.driverName || "",
+      note: update.note || "",
+      allocations: (update.allocations || []).map((allocation) => ({
+        line_id: allocation.lineId,
+        quantity: allocation.quantity,
+      })),
+    },
+  });
+  if (result.error) throw result.error;
 }
 export async function getStats(date: string): Promise<DashboardStats> {
   return check(await supabase.rpc("reception_stats", { day: date }));

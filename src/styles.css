@@ -929,9 +929,105 @@ table {
   border-bottom: 1px solid var(--line);
   min-width: 0;
 }
+.loading-dashboard-table table {
+  min-width: 1380px;
+}
+.loading-dashboard-table th:first-child {
+  min-width: 175px;
+}
+.loading-dashboard-table th:nth-child(2),
+.loading-dashboard-table th:nth-child(3),
+.loading-dashboard-table th:nth-child(4) {
+  min-width: 112px;
+}
+.loading-dashboard-table th:nth-child(n + 5) {
+  min-width: 145px;
+}
+.loading-dashboard-table tbody th button,
+.payment-summary-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.loading-dashboard-table tbody th button {
+  width: 100%;
+  padding: 0;
+  text-align: left;
+}
+.payment-summary-link {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 5px;
+  text-align: center;
+}
+.payment-summary-link:hover:not(:disabled) {
+  background: #edf8f3;
+  color: var(--green);
+}
+.payment-summary-link:disabled {
+  color: #adb8b2;
+  cursor: default;
+}
+.payment-summary-link b,
+.payment-summary-link small {
+  display: block;
+}
+.loading-bill-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+  background: #f6fbf8;
+}
+.loading-bill-entry > div {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: #315b4c;
+}
+.loading-bill-entry strong,
+.loading-bill-entry small {
+  display: block;
+}
+.loading-bill-entry small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.loading-bill-entry form {
+  display: grid;
+  grid-template-columns: auto minmax(190px, 260px) auto;
+  align-items: center;
+}
+.loading-bill-entry form > span {
+  height: 40px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #bfcfc7;
+  border-right: 0;
+  border-radius: 5px 0 0 5px;
+  background: #e8f4ee;
+  color: #245c49;
+  font-family: Arial, sans-serif;
+  font-weight: 700;
+}
+.loading-bill-entry form input {
+  height: 40px;
+  border-radius: 0;
+}
+.loading-bill-entry form .button {
+  height: 40px;
+  margin-left: 8px;
+}
 .loading-toolbar {
   display: grid;
-  grid-template-columns: minmax(260px, 1.6fr) repeat(4, minmax(135px, 0.65fr));
+  grid-template-columns: minmax(280px, 2fr) repeat(4, minmax(145px, 1fr));
   gap: 10px;
   padding: 18px 20px;
   align-items: center;
@@ -943,6 +1039,28 @@ table {
 }
 .loading-search {
   min-width: 0;
+}
+.loading-clear {
+  justify-self: start;
+}
+.loading-result-summary {
+  min-height: 42px;
+  padding: 9px 20px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  border-top: 1px solid #edf1ee;
+  background: #fbfcfb;
+  color: #6f8077;
+  font-size: 13px;
+}
+.loading-result-summary span + span {
+  padding-left: 18px;
+  border-left: 1px solid var(--line);
+}
+.loading-result-summary strong {
+  margin-left: auto;
+  color: var(--green);
 }
 .loading-sort {
   position: relative;
@@ -991,7 +1109,10 @@ table {
   width: 120px;
 }
 .loading-table th:nth-child(8) {
-  width: 105px;
+  width: 125px;
+}
+.loading-table th:nth-child(9) {
+  width: 90px;
 }
 .loading-table td {
   padding: 14px 13px;
@@ -1015,6 +1136,54 @@ table {
 }
 .loading-table tbody tr.selected {
   background: #eef8f3;
+}
+.loading-table .loading-group-row {
+  background: #f1f7f4;
+}
+.loading-table .loading-group-row::after {
+  display: none;
+}
+.loading-table .loading-group-row:hover {
+  background: #eaf4ef;
+}
+.loading-group-row td {
+  padding-top: 10px;
+  padding-bottom: 10px;
+  vertical-align: middle;
+}
+.loading-group-row td[colspan] button {
+  width: 100%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  border: 0;
+  background: transparent;
+  color: #52675b;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.loading-group-row button > svg {
+  flex: 0 0 auto;
+  color: var(--green);
+}
+.loading-group-row button > strong {
+  min-width: 190px;
+  color: #244b3c;
+}
+.loading-group-row button > span {
+  padding-left: 13px;
+  border-left: 1px solid #cddbd3;
+  white-space: nowrap;
+}
+.loading-group-row button > small {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: #78887f;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .loading-table td > strong {
   display: block;
@@ -1070,6 +1239,32 @@ table {
 }
 .loading-branch {
   font-weight: 600;
+}
+.payment-mode {
+  display: inline-flex;
+  padding: 4px 7px;
+  border-radius: 4px;
+  background: #edf2ef;
+  color: #52665b;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.payment-mode.CASH_ORIGIN {
+  background: #e8f5ed;
+  color: #24704d;
+}
+.payment-mode.CASH_DESTINATION {
+  background: #eaf3fb;
+  color: #2d6693;
+}
+.payment-mode.CREDIT_ORIGIN {
+  background: #fff4dc;
+  color: #956514;
+}
+.payment-mode.CREDIT_DESTINATION {
+  background: #f2ebf7;
+  color: #76538e;
 }
 .loading-age {
   display: inline-flex;
@@ -1151,6 +1346,225 @@ table {
   font-size: 13px;
   margin-top: 3px;
 }
+.load-allocation-list {
+  max-height: min(410px, 46vh);
+  overflow: auto;
+  border: 1px solid var(--line);
+}
+.load-allocation-list > header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 11px 14px;
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  background: #f6f9f7;
+}
+.load-allocation-list > header small {
+  color: var(--muted);
+}
+.load-allocation-list > label {
+  min-height: 60px;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px 58px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #e9eeeb;
+}
+.load-allocation-list > label:last-child {
+  border-bottom: 0;
+}
+.load-allocation-list > label.invalid {
+  background: #fff4f3;
+}
+.load-allocation-list label span strong,
+.load-allocation-list label span small {
+  display: block;
+}
+.load-allocation-list label span small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.load-allocation-list input {
+  height: 38px;
+  text-align: right;
+}
+.load-allocation-list label > b {
+  color: #687970;
+  font-weight: 500;
+}
+.selected-bill-review,
+.trip-detail {
+  display: grid;
+  gap: 18px;
+}
+.selected-bill-summary {
+  padding: 13px 16px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  border: 1px solid var(--line);
+  background: #f6faf7;
+  color: #65766d;
+}
+.selected-bill-summary span + span {
+  padding-left: 20px;
+  border-left: 1px solid var(--line);
+}
+.selected-bill-summary strong {
+  margin-left: auto;
+  color: #285b49;
+}
+.selected-bill-scroll,
+.trip-line-scroll {
+  max-height: min(430px, 50vh);
+  border: 1px solid var(--line);
+}
+.selected-bill-table {
+  min-width: 850px;
+}
+.selected-bill-table th:last-child,
+.selected-bill-table td:last-child {
+  width: 110px;
+  text-align: right;
+}
+.trip-manager {
+  min-width: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+.trip-toolbar {
+  padding: 18px 20px;
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) 210px 210px;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.trip-toolbar input,
+.trip-toolbar select {
+  height: 40px;
+}
+.trip-table {
+  min-width: 980px;
+}
+.trip-table th:last-child,
+.trip-table td:last-child {
+  width: 170px;
+}
+.trip-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+.trip-actions .button {
+  white-space: nowrap;
+}
+.trip-status {
+  display: inline-flex;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #edf3ef;
+  color: #52675c;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.trip-status.DEPARTED {
+  background: #e8f3fb;
+  color: #316d97;
+}
+.trip-status.RECEIVED {
+  background: #e8f6ee;
+  color: #28724e;
+}
+.trip-status.CANCELLED {
+  background: #f3f1f2;
+  color: #8f747c;
+}
+.trip-detail-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--line);
+  background: #f7faf8;
+}
+.trip-detail-summary > div {
+  padding: 13px 15px;
+  border-right: 1px solid var(--line);
+}
+.trip-detail-summary > div:last-child {
+  border-right: 0;
+}
+.trip-detail-summary span,
+.trip-detail-summary strong {
+  display: block;
+}
+.trip-detail-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.trip-detail-summary strong {
+  margin-top: 4px;
+  color: #334d40;
+}
+.trip-edit-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.2fr;
+  gap: 12px;
+}
+.trip-vehicle-summary {
+  padding: 13px 15px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+}
+.trip-vehicle-summary > svg {
+  color: var(--green);
+}
+.trip-vehicle-summary strong,
+.trip-vehicle-summary span {
+  display: block;
+}
+.trip-vehicle-summary span,
+.trip-vehicle-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.trip-vehicle-summary > small {
+  margin-left: auto;
+}
+.trip-line-table {
+  min-width: 820px;
+}
+.trip-line-table tr.removed {
+  background: #f7f5f5;
+  color: #9c8a8f;
+  text-decoration: line-through;
+}
+.trip-quantity-input {
+  display: inline-grid;
+  grid-template-columns: 100px auto;
+  align-items: center;
+  gap: 8px;
+}
+.trip-quantity-input input {
+  height: 36px;
+  text-align: right;
+}
+.trip-quantity-input span {
+  color: var(--muted);
+}
+.trip-detail-footer > span {
+  flex: 1;
+}
+.trip-detail-footer .button.danger {
+  margin-right: auto;
+}
 .shipment-search-items {
   min-width: 180px;
   max-width: 300px;
@@ -1192,6 +1606,47 @@ table {
   }
   .loading-selection-bar .button {
     width: 100%;
+  }
+  .loading-bill-entry {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .loading-bill-entry form {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .loading-result-summary {
+    flex-wrap: wrap;
+  }
+  .loading-result-summary strong {
+    margin-left: 0;
+  }
+  .load-allocation-list > label {
+    grid-template-columns: minmax(0, 1fr) 90px 45px;
+  }
+  .trip-toolbar,
+  .trip-edit-fields {
+    grid-template-columns: 1fr;
+  }
+  .trip-detail-summary {
+    grid-template-columns: 1fr 1fr;
+  }
+  .trip-detail-summary > div:nth-child(2) {
+    border-right: 0;
+  }
+  .trip-detail-summary > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+  .selected-bill-summary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .selected-bill-summary span + span {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .selected-bill-summary strong {
+    margin-left: 0;
   }
 }
 .intake-layout {
