@@ -580,8 +580,6 @@ export default function Settings() {
                   pattern="[A-Za-z0-9]{2,8}"
                   maxLength={8}
                   value={branch.code}
-                  readOnly={!w.demo && !creatingBranch}
-                  title={!w.demo && !creatingBranch ? "รอปรับฐานข้อมูลก่อนแก้รหัสสาขาเดิม" : undefined}
                   onChange={(event) =>
                     setBranch({
                       ...branch,
