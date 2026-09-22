@@ -1559,6 +1559,11 @@ table {
 .trip-quantity-input span {
   color: var(--muted);
 }
+.trip-quantity-limit {
+  grid-column: 1 / -1;
+  text-align: right;
+  color: var(--muted);
+}
 .trip-detail-footer > span {
   flex: 1;
 }

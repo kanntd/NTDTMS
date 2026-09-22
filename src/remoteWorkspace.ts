@@ -278,6 +278,8 @@ export type RemoteBillInput = {
   withholding_amount: number;
   rounding: number;
   collect_now: boolean;
+  payment_method: "CASH" | "TRANSFER";
+  payment_reference: string;
   note: string;
   opened_by_employee_id: string;
   items: Array<{

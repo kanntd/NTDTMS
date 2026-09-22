@@ -71,6 +71,8 @@ type Draft = {
   taxOverride: number | null;
   roundCash: boolean;
   collect: boolean;
+  paymentMethod: "CASH" | "TRANSFER";
+  paymentReference: string;
   note: string;
 };
 type Bill = {
@@ -129,6 +131,8 @@ const blank = (openedByEmployeeId = ""): Draft => ({
   taxOverride: null,
   roundCash: false,
   collect: false,
+  paymentMethod: "CASH",
+  paymentReference: "",
   note: "",
 });
 const sortThai = (a: Choice, b: Choice) => a.label.localeCompare(b.label, "th");
@@ -183,6 +187,9 @@ function load(): State {
           ...stored.drafts,
           openedByEmployeeId: stored.drafts.openedByEmployeeId || "",
           billingCycle: stored.drafts.billingCycle || "MONTH_END",
+          paymentMethod: stored.drafts.paymentMethod || "CASH",
+          paymentReference: stored.drafts.paymentReference || "",
+          collect: false,
           withholding: stored.version === 4 ? false : stored.drafts.withholding,
           lines: stored.drafts.lines.map((row) => ({
             ...row,
@@ -554,6 +561,8 @@ export default function IntakePrototype() {
     return {
       ...next,
       collect: false,
+      paymentMethod: next.payment === f.payment ? next.paymentMethod : "CASH",
+      paymentReference: next.payment === f.payment ? next.paymentReference : "",
       taxOverride: null,
       lines: next.lines.map((row) => {
         const nextPrice = price(row, next);
@@ -825,7 +834,10 @@ export default function IntakePrototype() {
         f.payment.startsWith("CREDIT") && f.billingCycle === "MONTH_END"
           ? monthlyBillingPeriod(new Date())
           : undefined,
-      draft: structuredClone(f),
+      draft: structuredClone({
+        ...f,
+        collect: issue && payment === "CASH_ORIGIN",
+      }),
       receiver: structuredClone(receiver),
       sender: structuredClone(sender),
       withheld,
@@ -859,7 +871,10 @@ export default function IntakePrototype() {
           discount_reason: f.reason,
           withholding_amount: withheld,
           rounding: amount.rounding,
-          collect_now: f.collect,
+          collect_now: payment === "CASH_ORIGIN",
+          payment_method: f.paymentMethod,
+          payment_reference:
+            f.paymentMethod === "TRANSFER" ? f.paymentReference.trim() : "",
           note: f.note,
           opened_by_employee_id: opener.id,
           items: bill.items.map((item) => ({
@@ -1527,15 +1542,31 @@ export default function IntakePrototype() {
             </strong>
           </div>
           {f.payment === "CASH_ORIGIN" && (
-            <label className="desk-round">
-              <input
-                type="checkbox"
-                checked={f.collect}
-                disabled={amount.pending}
-                onChange={(e) => patch({ collect: e.target.checked })}
-              />
-              รับเงินต้นทางแล้ว
-            </label>
+            <>
+              <Field label="วิธีรับเงินต้นทาง">
+                <select
+                  value={f.paymentMethod}
+                  onChange={(e) =>
+                    patch({
+                      paymentMethod: e.target.value as Draft["paymentMethod"],
+                    })
+                  }
+                >
+                  <option value="CASH">เงินสด</option>
+                  <option value="TRANSFER">โอนเงิน</option>
+                </select>
+              </Field>
+              {f.paymentMethod === "TRANSFER" && (
+                <Field label="เลขอ้างอิงการโอน (ไม่บังคับ)">
+                  <input
+                    value={f.paymentReference}
+                    onChange={(e) =>
+                      patch({ paymentReference: e.target.value })
+                    }
+                  />
+                </Field>
+              )}
+            </>
           )}
           {error && (
             <p className="desk-error" role="alert">
@@ -1819,7 +1850,17 @@ function BillPreview({
               <p>
                 ยอดรับสุทธิ <b>{money(b.amounts.due)}</b>
               </p>
-              <p>{b.draft.collect ? "รับเงินต้นทางแล้ว" : "ยังไม่รับเงิน"}</p>
+              {b.draft.payment === "CASH_ORIGIN" && (
+                <p>
+                  {b.draft.collect ? "รับเงินต้นทางแล้ว" : "วิธีรับเงินต้นทาง"}{" "}
+                  ·{" "}
+                  {b.draft.paymentMethod === "TRANSFER" ? "โอนเงิน" : "เงินสด"}
+                  {b.draft.paymentMethod === "TRANSFER" &&
+                  b.draft.paymentReference
+                    ? ` · ${b.draft.paymentReference}`
+                    : ""}
+                </p>
+              )}
             </>
           )}
         </div>

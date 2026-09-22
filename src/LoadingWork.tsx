@@ -27,7 +27,7 @@ import { localDate, money, number, thaiDate } from "./domain";
 import { BRANCH_OPTIONS } from "./intakeData";
 import { billNumberPrefix } from "./billNumber";
 import LoadTripManager from "./LoadTripManager";
-import { currentDriver, loadOperations, type Vehicle } from "./operationsStore";
+import { currentDriver, loadOperations } from "./operationsStore";
 import { loadRemoteWorkspace } from "./remoteWorkspace";
 import { calendarAgeInBangkok } from "./dashboardQueue";
 import {
@@ -41,6 +41,7 @@ import { Button, Empty, Field, Loading, Modal } from "./ui";
 import {
   PAYMENT_LABELS,
   type LoadingQueueRecord,
+  type LoadTripRecord,
   type PaymentMode,
 } from "./types";
 
@@ -97,6 +98,7 @@ export default function LoadingWork({
 }) {
   const w = useWorkspace();
   const [rows, setRows] = useState<LoadingQueueRecord[]>([]);
+  const [trips, setTrips] = useState<LoadTripRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [branch, setBranch] = useState(initialBranch);
@@ -119,15 +121,27 @@ export default function LoadingWork({
     {},
   );
   const [confirming, setConfirming] = useState(false);
+  const [creatingTrip, setCreatingTrip] = useState(false);
+  const [resumeSelection, setResumeSelection] = useState(false);
+  const [createBranch, setCreateBranch] = useState(initialBranch);
+  const [createVehicleId, setCreateVehicleId] = useState("");
+  const [tripId, setTripId] = useState("");
   const [reviewingSelection, setReviewingSelection] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<"QUEUE" | "TRIPS">(
     "QUEUE",
   );
-  const [vehicleId, setVehicleId] = useState("");
   const [busy, setBusy] = useState(false);
   const [operations, setOperations] = useState(loadOperations);
   const loadedOnce = useRef(false);
-  const vehicles = operations.vehicles.filter((vehicle) => vehicle.active);
+  const activeVehicles = operations.vehicles.filter(
+    (vehicle) => vehicle.active,
+  );
+  const createVehicle = activeVehicles.find(
+    (vehicle) => vehicle.id === createVehicleId,
+  );
+  const createDriver = createVehicle
+    ? currentDriver(operations, createVehicle.id)
+    : undefined;
 
   useEffect(() => {
     if (w.demo) return;
@@ -158,7 +172,12 @@ export default function LoadingWork({
     setLoading(true);
     setError("");
     try {
-      setRows(await w.service.loadingQueue());
+      const [nextRows, nextTrips] = await Promise.all([
+        w.service.loadingQueue(),
+        w.service.loadTrips(),
+      ]);
+      setRows(nextRows);
+      setTrips(nextTrips);
       loadedOnce.current = true;
     } catch (cause) {
       setError((cause as Error).message || "โหลดรายการขึ้นรถไม่สำเร็จ");
@@ -331,8 +350,9 @@ export default function LoadingWork({
     (sum, row) => sum + row.total_weight,
     0,
   );
-  const vehicle = vehicles.find((row) => row.id === vehicleId);
-  const driver = vehicle ? currentDriver(operations, vehicle.id) : undefined;
+  const draftTrips = trips.filter(
+    (trip) => trip.status === "DRAFT" && trip.destinationBranchCode === branch,
+  );
   const issuingBranch =
     w.branches.find((row) => row.id === w.profile.branch_id) ||
     w.branches.find((row) => row.can_issue_bills);
@@ -446,39 +466,50 @@ export default function LoadingWork({
     );
   }
 
-  async function confirmLoad() {
+  async function createTrip() {
+    if (!createBranch || !createVehicleId) return;
+    setBusy(true);
+    try {
+      const manifestNo = `LOAD-${localDate().replaceAll("-", "").slice(2)}-${createBranch}-${String(Date.now()).slice(-6)}${crypto.randomUUID().slice(0, 4).toUpperCase()}`;
+      const id = await w.service.createLoadTrip(
+        manifestNo,
+        createBranch,
+        createVehicleId,
+      );
+      if (branch !== createBranch) chooseBranch(createBranch);
+      setTripId(id);
+      setCreatingTrip(false);
+      setCreateVehicleId("");
+      await refresh();
+      setConfirming(resumeSelection);
+      setResumeSelection(false);
+      w.toast(`สร้างเที่ยวรถ ${manifestNo} แล้ว`);
+    } catch (cause) {
+      w.toast((cause as Error).message || "สร้างเที่ยวรถไม่สำเร็จ", true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveSelection() {
     if (
-      !vehicle ||
-      !driver ||
+      !tripId ||
       allocations.length === 0 ||
       mixedBranches ||
-      invalidAllocation ||
-      !branch
+      invalidAllocation
     )
       return;
     setBusy(true);
     try {
-      const confirmedAt = new Date().toISOString();
-      const manifestNo = `LOAD-${localDate().replaceAll("-", "").slice(2)}-${String(Date.now()).slice(-6)}`;
-      await w.service.confirmLoad({
-        manifestNo,
-        vehicleId: vehicle.id,
-        vehicleNo: vehicle.plateNo,
-        driverId: driver.id,
-        driverName: driver.name,
-        confirmedAt,
-        destinationBranchCode: branch,
-        allocations,
-      });
+      await w.service.saveLoadTripItems(tripId, "ADD", allocations);
       setSelected(new Set());
       setLoadQuantities({});
-      setVehicleId("");
       setConfirming(false);
       w.refresh();
-      w.toast(`ยืนยันรถออก ${manifestNo} แล้ว`);
+      w.toast("บันทึกสินค้าลงเที่ยวรถแล้ว");
       setWorkspaceView("TRIPS");
     } catch (cause) {
-      w.toast((cause as Error).message || "ยืนยันขึ้นรถไม่สำเร็จ", true);
+      w.toast((cause as Error).message || "บันทึกสินค้าไม่สำเร็จ", true);
     } finally {
       setBusy(false);
     }
@@ -530,7 +561,7 @@ export default function LoadingWork({
                 </b>
                 <small>
                   {item.loaded_quantity
-                    ? `ขึ้นแล้ว ${number(item.loaded_quantity)}/${number(item.original_quantity || item.quantity)}`
+                    ? `ทั้งหมด ${number(item.original_quantity || item.quantity)} · จัดแล้ว ${number(item.loaded_quantity)} · คงเหลือ ${number(item.quantity)}`
                     : row.price_pending
                       ? "รอราคา"
                       : `@ ${money(item.unit_price)}`}
@@ -597,11 +628,22 @@ export default function LoadingWork({
           </h1>
           <p>
             {branch
-              ? "ตรวจรายการ จัดกลุ่มสินค้า และสร้างเที่ยวรถ"
+              ? "ตรวจรายการและบันทึกสินค้าลงเที่ยวรถ"
               : "ตรวจจำนวนของและยอดเงินก่อนตัดสินใจจัดรถไปแต่ละสาขา"}
           </p>
         </div>
         <div className="heading-actions">
+          <Button
+            className="primary"
+            onClick={() => {
+              setCreateBranch(branch);
+              setCreateVehicleId("");
+              setResumeSelection(false);
+              setCreatingTrip(true);
+            }}
+          >
+            <PackageCheck size={17} /> สร้างเที่ยวรถ
+          </Button>
           <Button onClick={() => setWorkspaceView("TRIPS")}>
             <Truck size={17} /> เที่ยวรถที่สร้างแล้ว
           </Button>
@@ -1017,17 +1059,78 @@ export default function LoadingWork({
               <Button
                 className="primary"
                 disabled={mixedBranches}
-                onClick={() => setConfirming(true)}
+                onClick={() => {
+                  setTripId(draftTrips[0]?.id || "");
+                  setConfirming(true);
+                }}
               >
-                <PackageCheck size={17} /> สร้างเที่ยวรถ
+                <PackageCheck size={17} /> บันทึกลงเที่ยวรถ
               </Button>
             </div>
           )}
         </>
       )}
 
+      {creatingTrip && (
+        <Modal title="สร้างเที่ยวรถ" onClose={() => setCreatingTrip(false)}>
+          <div className="modal-body load-confirmation">
+            <Field label="สาขาปลายทาง" required>
+              <select
+                value={createBranch}
+                onChange={(event) => setCreateBranch(event.target.value)}
+              >
+                <option value="">เลือกสาขาปลายทาง</option>
+                {branches.map((row) => (
+                  <option key={row.code} value={row.code}>
+                    {row.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="ทะเบียนรถ" required>
+              <select
+                value={createVehicleId}
+                onChange={(event) => setCreateVehicleId(event.target.value)}
+              >
+                <option value="">เลือกทะเบียนรถ</option>
+                {activeVehicles.map((vehicle) => (
+                  <option key={vehicle.id} value={vehicle.id}>
+                    {vehicle.plateNo} · {vehicle.vehicleType}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            {createVehicleId && (
+              <div className="load-driver">
+                <Truck size={18} />
+                <div>
+                  <span>พนักงานขับรถ</span>
+                  <strong>
+                    {createDriver?.name || "ทะเบียนนี้ยังไม่ได้ผูกคนขับ"}
+                  </strong>
+                </div>
+              </div>
+            )}
+            <div className="modal-footer">
+              <Button onClick={() => setCreatingTrip(false)}>ยกเลิก</Button>
+              <Button
+                className="primary"
+                disabled={!createBranch || !createVehicleId}
+                busy={busy}
+                onClick={() => void createTrip()}
+              >
+                สร้างเที่ยวรถ
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {confirming && (
-        <Modal title="สร้างเที่ยวรถ" onClose={() => setConfirming(false)}>
+        <Modal
+          title="บันทึกสินค้าลงเที่ยวรถ"
+          onClose={() => setConfirming(false)}
+        >
           <div className="modal-body load-confirmation">
             <div className="load-confirm-summary">
               <ClipboardCheck size={22} />
@@ -1041,30 +1144,35 @@ export default function LoadingWork({
                 </span>
               </div>
             </div>
-            <Field label="ทะเบียนรถ" required>
+            <Field label="เที่ยวรถ" required>
               <select
-                value={vehicleId}
-                onChange={(event) => setVehicleId(event.target.value)}
+                value={tripId}
+                onChange={(event) => setTripId(event.target.value)}
               >
-                <option value="">เลือกทะเบียนรถ</option>
-                {vehicles.map((row: Vehicle) => (
-                  <option key={row.id} value={row.id}>
-                    {row.plateNo} · {row.vehicleType}
+                <option value="">เลือกเที่ยวรถที่กำลังจัดของ</option>
+                {draftTrips.map((trip) => (
+                  <option key={trip.id} value={trip.id}>
+                    {trip.manifestNo}
                   </option>
                 ))}
               </select>
             </Field>
-            <div className="load-driver">
-              <Truck size={18} />
-              <div>
-                <span>พนักงานขับรถ</span>
-                <strong>
-                  {vehicleId
-                    ? driver?.name || "ทะเบียนนี้ยังไม่ได้ผูกคนขับ"
-                    : "เลือกทะเบียนรถก่อน"}
-                </strong>
+            {!draftTrips.length && (
+              <div className="alert error">
+                กรุณาสร้างเที่ยวรถของสาขานี้ก่อน
+                <Button
+                  onClick={() => {
+                    setConfirming(false);
+                    setCreateBranch(branch);
+                    setCreateVehicleId("");
+                    setResumeSelection(true);
+                    setCreatingTrip(true);
+                  }}
+                >
+                  สร้างเที่ยวรถ
+                </Button>
               </div>
-            </div>
+            )}
             <div className="load-allocation-list">
               <header>
                 <strong>จำนวนสินค้าที่ขึ้นเที่ยวนี้</strong>
@@ -1086,7 +1194,10 @@ export default function LoadingWork({
                           {row.shipment_no} · {item.description}
                         </strong>
                         <small>
-                          คงเหลือ {number(item.quantity)} {item.unit}
+                          ทั้งหมด{" "}
+                          {number(item.original_quantity || item.quantity)} ·
+                          จัดแล้ว {number(item.loaded_quantity || 0)} · คงเหลือ{" "}
+                          {number(item.quantity)} {item.unit}
                         </small>
                       </span>
                       <input
@@ -1120,14 +1231,11 @@ export default function LoadingWork({
                 className="primary"
                 busy={busy}
                 disabled={
-                  !vehicle ||
-                  !driver ||
-                  invalidAllocation ||
-                  allocations.length === 0
+                  !tripId || invalidAllocation || allocations.length === 0
                 }
-                onClick={() => void confirmLoad()}
+                onClick={() => void saveSelection()}
               >
-                <Truck size={17} /> ยืนยันรถออก
+                <PackageCheck size={17} /> บันทึกสินค้า
               </Button>
             </div>
           </div>

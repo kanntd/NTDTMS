@@ -24,8 +24,8 @@ import type {
 } from "./types";
 
 const STATUS_LABELS: Record<LoadTripStatus, string> = {
-  DRAFT: "แบบร่าง",
-  LOADED: "จัดขึ้นรถแล้ว",
+  DRAFT: "กำลังจัดของ",
+  LOADED: "ปิดรถแล้ว",
   DEPARTED: "รถออกแล้ว",
   RECEIVED: "ปลายทางรับรถแล้ว",
   CANCELLED: "ยกเลิก",
@@ -59,11 +59,15 @@ export default function LoadTripManager({
   const [branch, setBranch] = useState("");
   const [selectedTrip, setSelectedTrip] = useState<LoadTripRecord | null>(null);
   const [editing, setEditing] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [reason, setReason] = useState("");
   const [vehicleId, setVehicleId] = useState("");
   const [note, setNote] = useState("");
   const [quantities, setQuantities] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const canManage = w.profile.role === "owner" || w.profile.role === "admin";
+  const canWork = canManage || w.profile.role === "clerk";
   const vehicles = operations.vehicles.filter((row) => row.active);
 
   async function refresh() {
@@ -158,9 +162,10 @@ export default function LoadTripManager({
 
   function openTrip(trip: LoadTripRecord, edit = false) {
     setSelectedTrip(trip);
-    setEditing(
-      edit && canManage && !["RECEIVED", "CANCELLED"].includes(trip.status),
-    );
+    setEditing(edit && canWork && trip.status === "DRAFT");
+    setClosing(false);
+    setReopening(false);
+    setReason("");
     setVehicleId(trip.vehicleId);
     setNote(trip.note);
     setQuantities(
@@ -171,18 +176,12 @@ export default function LoadTripManager({
   }
 
   async function saveChanges() {
-    if (!selectedTrip) return;
-    const vehicle = vehicles.find((row) => row.id === vehicleId);
-    const driver = vehicle ? currentDriver(operations, vehicle.id) : undefined;
-    if (!vehicle || !driver) return;
+    if (!selectedTrip || selectedTrip.status !== "DRAFT") return;
     const allocations = activeLines(selectedTrip).map((line) => ({
-      lineId: line.id,
+      shipmentId: line.shipmentId,
+      itemId: line.itemId,
       quantity: Number(quantities[line.id] || 0),
     }));
-    if (!allocations.some((line) => line.quantity > 0)) {
-      w.toast("ถ้าต้องการนำออกทั้งหมด กรุณายกเลิกทั้งเที่ยวรถ", true);
-      return;
-    }
     if (
       allocations.some(
         (line) => !Number.isFinite(line.quantity) || line.quantity < 0,
@@ -193,15 +192,7 @@ export default function LoadTripManager({
     }
     setBusy(true);
     try {
-      await w.service.updateLoadTrip({
-        id: selectedTrip.id,
-        action: "UPDATE",
-        vehicleId: vehicle.id,
-        driverId: driver.id,
-        driverName: driver.name,
-        note,
-        allocations,
-      });
+      await w.service.saveLoadTripItems(selectedTrip.id, "SET", allocations);
       w.toast(`บันทึกการแก้ไข ${selectedTrip.manifestNo} แล้ว`);
       setEditing(false);
       onChanged();
@@ -223,10 +214,7 @@ export default function LoadTripManager({
       return;
     setBusy(true);
     try {
-      await w.service.updateLoadTrip({
-        id: selectedTrip.id,
-        action: "CANCEL",
-      });
+      await w.service.setLoadTripStatus(selectedTrip.id, "CANCEL");
       w.toast(`ยกเลิก ${selectedTrip.manifestNo} แล้ว`);
       setSelectedTrip(null);
       onChanged();
@@ -238,11 +226,66 @@ export default function LoadTripManager({
     }
   }
 
+  async function changeStatus(action: "CLOSE" | "DEPART" | "REOPEN") {
+    if (!selectedTrip) return;
+    if (
+      action === "DEPART" &&
+      !window.confirm(`ยืนยันรถออก ${selectedTrip.manifestNo}`)
+    )
+      return;
+    const vehicle = vehicles.find((row) => row.id === vehicleId);
+    const driver = vehicle ? currentDriver(operations, vehicle.id) : undefined;
+    setBusy(true);
+    try {
+      await w.service.setLoadTripStatus(selectedTrip.id, action, {
+        vehicleId: vehicle?.id,
+        driverId: driver?.id,
+        note,
+        reason,
+      });
+      w.toast(
+        action === "CLOSE"
+          ? "ปิดรถแล้ว"
+          : action === "DEPART"
+            ? "ยืนยันรถออกแล้ว"
+            : "เปิดรถกลับแล้ว",
+      );
+      setClosing(false);
+      setReopening(false);
+      onChanged();
+      await refresh();
+    } catch (cause) {
+      w.toast(
+        (cause as Error).message || "เปลี่ยนสถานะเที่ยวรถไม่สำเร็จ",
+        true,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const editVehicle = vehicles.find((row) => row.id === vehicleId);
   const editDriver = editVehicle
     ? currentDriver(operations, editVehicle.id)
     : undefined;
   const selectedLines = selectedTrip ? activeLines(selectedTrip) : [];
+  const maximumForLine = (line: LoadTripAllocation) =>
+    line.originalQuantity -
+    trips
+      .filter(
+        (trip) => trip.id !== selectedTrip?.id && trip.status !== "CANCELLED",
+      )
+      .flatMap(activeLines)
+      .filter((other) => other.itemId === line.itemId)
+      .reduce((sum, other) => sum + other.quantity, 0);
+  const invalidQuantities = selectedLines.some((line) => {
+    const quantity = Number(quantities[line.id] || 0);
+    return (
+      !Number.isFinite(quantity) ||
+      quantity < 0 ||
+      quantity > maximumForLine(line)
+    );
+  });
 
   return (
     <>
@@ -355,12 +398,11 @@ export default function LoadTripManager({
                         <Button onClick={() => openTrip(trip)}>
                           <Eye size={16} /> ดู
                         </Button>
-                        {canManage &&
-                          !["RECEIVED", "CANCELLED"].includes(trip.status) && (
-                            <Button onClick={() => openTrip(trip, true)}>
-                              <Edit3 size={16} /> แก้ไข
-                            </Button>
-                          )}
+                        {canWork && trip.status === "DRAFT" && (
+                          <Button onClick={() => openTrip(trip, true)}>
+                            <Edit3 size={16} /> แก้ไข
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -401,7 +443,7 @@ export default function LoadTripManager({
               </div>
             </div>
 
-            {editing ? (
+            {closing ? (
               <div className="trip-edit-fields">
                 <Field label="ทะเบียนรถ" required>
                   <select
@@ -434,6 +476,13 @@ export default function LoadTripManager({
                   />
                 </Field>
               </div>
+            ) : reopening ? (
+              <Field label="เหตุผลเปิดรถกลับ" required>
+                <input
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                />
+              </Field>
             ) : (
               <div className="trip-vehicle-summary">
                 <Truck size={20} />
@@ -474,7 +523,8 @@ export default function LoadTripManager({
                               <input
                                 type="number"
                                 min="0"
-                                step="any"
+                                max={maximumForLine(line)}
+                                step="0.0001"
                                 value={quantities[line.id] ?? line.quantity}
                                 onChange={(event) =>
                                   setQuantities((current) => ({
@@ -485,6 +535,9 @@ export default function LoadTripManager({
                                 aria-label={`จำนวน ${line.description} ในเที่ยวรถ`}
                               />
                               <span>{line.unit}</span>
+                              <small className="trip-quantity-limit">
+                                สูงสุด {number(maximumForLine(line))}
+                              </small>
                             </label>
                           ) : (
                             `${number(line.quantity)} ${line.unit}`
@@ -516,22 +569,68 @@ export default function LoadTripManager({
             </div>
 
             <div className="modal-footer trip-detail-footer">
-              {editing && canManage && (
-                <Button
-                  className="danger"
-                  busy={busy}
-                  onClick={() => void cancelTrip()}
-                >
-                  <Ban size={17} /> ยกเลิกทั้งเที่ยว
-                </Button>
-              )}
+              {canManage &&
+                ["DRAFT", "LOADED"].includes(selectedTrip.status) && (
+                  <Button
+                    className="danger"
+                    busy={busy}
+                    onClick={() => void cancelTrip()}
+                  >
+                    <Ban size={17} /> ยกเลิกทั้งเที่ยว
+                  </Button>
+                )}
               <span />
               <Button onClick={() => setSelectedTrip(null)}>ปิด</Button>
+              {canWork &&
+                selectedTrip.status === "DRAFT" &&
+                !editing &&
+                !closing && (
+                  <Button
+                    disabled={selectedLines.length === 0}
+                    onClick={() => setClosing(true)}
+                  >
+                    <Truck size={17} /> ปิดรถ
+                  </Button>
+                )}
+              {closing && (
+                <Button
+                  className="primary"
+                  busy={busy}
+                  disabled={
+                    !editVehicle || !editDriver || selectedLines.length === 0
+                  }
+                  onClick={() => void changeStatus("CLOSE")}
+                >
+                  ยืนยันปิดรถ
+                </Button>
+              )}
+              {canWork && selectedTrip.status === "LOADED" && !reopening && (
+                <Button
+                  className="primary"
+                  busy={busy}
+                  onClick={() => void changeStatus("DEPART")}
+                >
+                  <Truck size={17} /> ยืนยันรถออก
+                </Button>
+              )}
+              {canManage && selectedTrip.status === "LOADED" && !reopening && (
+                <Button onClick={() => setReopening(true)}>เปิดรถกลับ</Button>
+              )}
+              {reopening && (
+                <Button
+                  className="primary"
+                  busy={busy}
+                  disabled={reason.trim().length < 3}
+                  onClick={() => void changeStatus("REOPEN")}
+                >
+                  ยืนยันเปิดรถกลับ
+                </Button>
+              )}
               {editing && (
                 <Button
                   className="primary"
                   busy={busy}
-                  disabled={!editVehicle || !editDriver}
+                  disabled={invalidQuantities}
                   onClick={() => void saveChanges()}
                 >
                   บันทึกการแก้ไข

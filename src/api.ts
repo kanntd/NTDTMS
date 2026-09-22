@@ -353,6 +353,63 @@ export async function confirmLoad(load: LoadConfirmation) {
   if (result.error) throw result.error;
   return result.data as string;
 }
+export async function createLoadTrip(
+  manifestNo: string,
+  destinationBranchCode: string,
+  vehicleId: string,
+) {
+  const result = await supabase.rpc("create_load_trip", {
+    data: {
+      manifest_no: manifestNo,
+      destination_branch_code: destinationBranchCode,
+      vehicle_id: vehicleId,
+    },
+  });
+  if (result.error) throw result.error;
+  return result.data as string;
+}
+
+export async function saveLoadTripItems(
+  id: string,
+  mode: "ADD" | "SET",
+  allocations: Array<{ shipmentId: string; itemId: string; quantity: number }>,
+) {
+  const result = await supabase.rpc("save_load_trip_items", {
+    data: {
+      id,
+      mode,
+      allocations: allocations.map((line) => ({
+        shipment_id: line.shipmentId,
+        shipment_item_id: line.itemId,
+        quantity: line.quantity,
+      })),
+    },
+  });
+  if (result.error) throw result.error;
+}
+
+export async function setLoadTripStatus(
+  id: string,
+  action: "CLOSE" | "DEPART" | "REOPEN" | "CANCEL",
+  options: {
+    vehicleId?: string;
+    driverId?: string;
+    note?: string;
+    reason?: string;
+  } = {},
+) {
+  const result = await supabase.rpc("set_load_trip_status", {
+    data: {
+      id,
+      action,
+      vehicle_id: options.vehicleId || "",
+      driver_employee_id: options.driverId || "",
+      note: options.note || "",
+      reason: options.reason || "",
+    },
+  });
+  if (result.error) throw result.error;
+}
 export async function getLoadTrips(): Promise<LoadTripRecord[]> {
   const manifestResult = await supabase
     .from("load_manifests")

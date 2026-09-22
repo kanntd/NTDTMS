@@ -18,6 +18,8 @@ import type {
   LoadTripRecord,
   LoadTripStatus,
   LoadTripUpdate,
+  LoadTripCommand,
+  LoadTripItemChange,
 } from "./types";
 import { applyRecordedLoads } from "./loadingQueue";
 import {
@@ -43,6 +45,7 @@ type DemoLoad = LoadConfirmation & {
   id: string;
   status: LoadTripStatus;
   note: string;
+  loadedAt?: string;
   updatedAt: string;
 };
 
@@ -425,6 +428,163 @@ export function createService(demo: boolean) {
       saveDemoLoads(previous);
       saveDemo(state);
     },
+    createLoadTrip: async (
+      manifestNo: string,
+      destinationBranchCode: string,
+      vehicleId: string,
+    ) => {
+      if (!demo)
+        return api.createLoadTrip(manifestNo, destinationBranchCode, vehicleId);
+      if (readDemoLoads().some((row) => row.manifestNo === manifestNo))
+        throw new Error("เลขเที่ยวรถซ้ำ");
+      const operations = loadOperations();
+      const vehicle = operations.vehicles.find(
+        (row) => row.id === vehicleId && row.active,
+      );
+      if (!vehicle) throw new Error("ไม่พบทะเบียนรถหรือรถหยุดใช้งานแล้ว");
+      const assignment = operations.driverAssignments.find(
+        (row) => row.vehicleId === vehicleId && row.endsAt === null,
+      );
+      const driver = operations.employees.find(
+        (row) => row.id === assignment?.employeeId && row.active,
+      );
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      saveDemoLoads([
+        {
+          id,
+          manifestNo,
+          destinationBranchCode,
+          vehicleId: vehicle.id,
+          vehicleNo: vehicle.plateNo,
+          driverId: driver?.id || "",
+          driverName: driver?.name || "",
+          confirmedAt: now,
+          allocations: [],
+          status: "DRAFT",
+          note: "",
+          updatedAt: now,
+        },
+        ...readDemoLoads(),
+      ]);
+      return id;
+    },
+    saveLoadTripItems: async (
+      id: string,
+      mode: "ADD" | "SET",
+      changes: LoadTripItemChange[],
+    ) => {
+      if (!demo) return api.saveLoadTripItems(id, mode, changes);
+      const loads = readDemoLoads();
+      const trip = loads.find((row) => row.id === id);
+      if (!trip || trip.status !== "DRAFT")
+        throw new Error("เที่ยวรถนี้แก้สินค้าไม่ได้");
+      const shipments = allDemoShipments();
+      for (const change of changes) {
+        const shipment = shipments.find((row) => row.id === change.shipmentId);
+        const item = shipment?.items.find((row) => row.id === change.itemId);
+        if (
+          !shipment ||
+          !item ||
+          shipment.destination_branch_code !== trip.destinationBranchCode
+        )
+          throw new Error("บิลนี้ไปคนละสาขากับเที่ยวรถ");
+        if (!["RECEIVED", "IN_TRANSIT"].includes(shipment.shipment_status))
+          throw new Error("บิลนี้ไม่อยู่ในสถานะที่จัดขึ้นรถได้");
+        const existing = trip.allocations.find((row) => row.itemId === item.id);
+        const elsewhere = loads
+          .filter((row) => row.id !== id && row.status !== "CANCELLED")
+          .flatMap((row) => row.allocations)
+          .filter((row) => row.itemId === item.id)
+          .reduce((sum, row) => sum + row.quantity, 0);
+        const next =
+          mode === "ADD"
+            ? (existing?.quantity || 0) + change.quantity
+            : change.quantity;
+        if (
+          !Number.isFinite(next) ||
+          next < 0 ||
+          next > item.quantity - elsewhere
+        )
+          throw new Error("จำนวนขึ้นรถมากกว่าจำนวนคงเหลือ");
+        if (existing) {
+          if (next === 0)
+            trip.allocations = trip.allocations.filter(
+              (row) => row !== existing,
+            );
+          else existing.quantity = next;
+        } else if (next > 0)
+          trip.allocations.push({ ...change, quantity: next });
+      }
+      trip.updatedAt = new Date().toISOString();
+      saveDemoLoads(loads);
+    },
+    setLoadTripStatus: async (
+      id: string,
+      action: LoadTripCommand,
+      options: {
+        vehicleId?: string;
+        driverId?: string;
+        note?: string;
+        reason?: string;
+      } = {},
+    ) => {
+      if (!demo) return api.setLoadTripStatus(id, action, options);
+      const loads = readDemoLoads();
+      const trip = loads.find((row) => row.id === id);
+      if (!trip) throw new Error("ไม่พบเที่ยวรถ");
+      if (action === "CLOSE") {
+        if (trip.status !== "DRAFT" || !trip.allocations.length)
+          throw new Error("กรุณาบันทึกสินค้าในเที่ยวก่อนปิดรถ");
+        const vehicle = loadOperations().vehicles.find(
+          (row) => row.id === options.vehicleId && row.active,
+        );
+        const driver = vehicle
+          ? loadOperations().driverAssignments.find(
+              (row) =>
+                row.vehicleId === vehicle.id &&
+                row.employeeId === options.driverId &&
+                row.endsAt === null,
+            )
+          : undefined;
+        if (!vehicle || !driver) throw new Error("กรุณาเลือกทะเบียนรถและคนขับ");
+        trip.vehicleId = vehicle.id;
+        trip.vehicleNo = vehicle.plateNo;
+        trip.driverId = driver.employeeId;
+        trip.note = options.note || "";
+        trip.status = "LOADED";
+        trip.loadedAt = new Date().toISOString();
+      } else if (action === "DEPART") {
+        if (trip.status !== "LOADED")
+          throw new Error("กรุณาปิดรถก่อนยืนยันรถออก");
+        trip.status = "DEPARTED";
+        trip.confirmedAt = new Date().toISOString();
+        const state = loadDemo();
+        for (const shipmentId of new Set(
+          trip.allocations.map((line) => line.shipmentId),
+        )) {
+          if (updateReceptionBillStatus(shipmentId, "IN_TRANSIT", trip))
+            continue;
+          const shipment = state.shipments.find((row) => row.id === shipmentId);
+          if (shipment) shipment.shipment_status = "IN_TRANSIT";
+        }
+        saveDemo(state);
+      } else if (action === "REOPEN") {
+        if (
+          trip.status !== "LOADED" ||
+          (options.reason || "").trim().length < 3
+        )
+          throw new Error("กรุณาระบุเหตุผลเปิดรถกลับ");
+        trip.status = "DRAFT";
+        trip.loadedAt = "";
+      } else if (action === "CANCEL") {
+        if (!(["DRAFT", "LOADED"] as LoadTripStatus[]).includes(trip.status))
+          throw new Error("ยกเลิกได้เฉพาะเที่ยวที่รถยังไม่ออก");
+        trip.status = "CANCELLED";
+      }
+      trip.updatedAt = new Date().toISOString();
+      saveDemoLoads(loads);
+    },
     loadTrips: async (): Promise<LoadTripRecord[]> => {
       if (!demo) return api.getLoadTrips();
       const sourceRows = [
@@ -457,8 +617,8 @@ export function createService(demo: boolean) {
         vehicleNo: load.vehicleNo,
         driverId: load.driverId,
         driverName: load.driverName,
-        loadedAt: load.confirmedAt,
-        departedAt: load.confirmedAt,
+        loadedAt: load.loadedAt || load.confirmedAt,
+        departedAt: load.status === "DEPARTED" ? load.confirmedAt : "",
         note: load.note,
         allocations: load.allocations.flatMap((allocation) => {
           const shipment = sourceRows.find(

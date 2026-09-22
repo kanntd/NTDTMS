@@ -257,6 +257,12 @@ export interface LoadTripUpdate {
   note?: string;
   allocations?: Array<{ lineId: string; quantity: number }>;
 }
+export type LoadTripCommand = "CLOSE" | "DEPART" | "REOPEN" | "CANCEL";
+export interface LoadTripItemChange {
+  shipmentId: string;
+  itemId: string;
+  quantity: number;
+}
 export interface PriceRule {
   id: string;
   product_id: string;
