@@ -1139,11 +1139,19 @@ export default function LoadingWork({
                 onChange={(event) => setTripId(event.target.value)}
               >
                 <option value="">เลือกเที่ยวรถที่กำลังจัดของ</option>
-                {draftTrips.map((trip) => (
-                  <option key={trip.id} value={trip.id}>
-                    {trip.manifestNo}
-                  </option>
-                ))}
+                {draftTrips.map((trip) => {
+                  const plate =
+                    operations.vehicles.find(
+                      (vehicle) => vehicle.id === trip.vehicleId,
+                    )?.plateNo ||
+                    trip.vehicleNo ||
+                    "ไม่ระบุทะเบียน";
+                  return (
+                    <option key={trip.id} value={trip.id}>
+                      {plate}
+                    </option>
+                  );
+                })}
               </select>
             </Field>
             {!draftTrips.length && (

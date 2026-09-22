@@ -30,7 +30,8 @@ import {
   type PriceAgreement,
   type PriceRequest,
 } from "./operationsStore";
-import { money } from "./domain";
+import { localDate, money, thaiDate, thaiTime } from "./domain";
+import DateInput from "./DateInput";
 import { intakeAmounts, onePercent } from "./intakeMath";
 import { PAYMENT_LABELS, type PaymentMode } from "./types";
 import { Button, Empty, Field, IconButton, Loading, Modal } from "./ui";
@@ -111,6 +112,15 @@ export function isWithinPriceHistoryRange(
   to: string,
 ) {
   const date = createdAt.slice(0, 10);
+  return (!from || date >= from) && (!to || date <= to);
+}
+
+export function isWithinPriceRequestRange(
+  requestedAt: string,
+  from: string,
+  to: string,
+) {
+  const date = localDate(new Date(requestedAt));
   return (!from || date >= from) && (!to || date <= to);
 }
 
@@ -234,6 +244,8 @@ export default function Pricing() {
   const [pendingStatus, setPendingStatus] = useState<
     PriceRequest["status"] | ""
   >("");
+  const [requestFrom, setRequestFrom] = useState("");
+  const [requestTo, setRequestTo] = useState("");
   const [historyFrom, setHistoryFrom] = useState("");
   const [historyTo, setHistoryTo] = useState("");
   const [historyApprover, setHistoryApprover] = useState("");
@@ -331,6 +343,9 @@ export default function Pricing() {
     .filter(matchesDimensions)
     .filter((row) => !pendingStatus || row.status === pendingStatus)
     .filter((row) =>
+      isWithinPriceRequestRange(row.requestedAt, requestFrom, requestTo),
+    )
+    .filter((row) =>
       `${partyName(registry.parties, row.receiverId)} ${partyName(registry.parties, row.senderId)} ${catalogName(registry.catalog, row.catalogId)} ${row.billNumber} ${PAYMENT_LABELS[row.payment]} ${branchLabel(row.branch)} ${requestStatusLabel[row.status]} ${row.note}`
         .toLocaleLowerCase("th")
         .includes(normalized),
@@ -379,6 +394,8 @@ export default function Pricing() {
   function clearFilters() {
     setFilters(emptyFilters);
     setPendingStatus("");
+    setRequestFrom("");
+    setRequestTo("");
     setHistoryFrom("");
     setHistoryTo("");
     setHistoryApprover("");
@@ -450,6 +467,8 @@ export default function Pricing() {
         senderOptions={senderOptions}
         productOptions={productOptions}
         pendingStatus={pendingStatus}
+        requestFrom={requestFrom}
+        requestTo={requestTo}
         historyFrom={historyFrom}
         historyTo={historyTo}
         historyApprover={historyApprover}
@@ -457,6 +476,11 @@ export default function Pricing() {
         resultCount={filteredCount}
         onFilters={setFilters}
         onPendingStatus={setPendingStatus}
+        onRequestFrom={(date) => {
+          setRequestFrom(date);
+          if (requestTo && date > requestTo) setRequestTo("");
+        }}
+        onRequestTo={setRequestTo}
         onHistoryFrom={setHistoryFrom}
         onHistoryTo={setHistoryTo}
         onHistoryApprover={setHistoryApprover}
@@ -647,6 +671,8 @@ function PriceFilterBar({
   senderOptions,
   productOptions,
   pendingStatus,
+  requestFrom,
+  requestTo,
   historyFrom,
   historyTo,
   historyApprover,
@@ -654,6 +680,8 @@ function PriceFilterBar({
   resultCount,
   onFilters,
   onPendingStatus,
+  onRequestFrom,
+  onRequestTo,
   onHistoryFrom,
   onHistoryTo,
   onHistoryApprover,
@@ -665,6 +693,8 @@ function PriceFilterBar({
   senderOptions: FilterOption[];
   productOptions: FilterOption[];
   pendingStatus: PriceRequest["status"] | "";
+  requestFrom: string;
+  requestTo: string;
   historyFrom: string;
   historyTo: string;
   historyApprover: string;
@@ -672,6 +702,8 @@ function PriceFilterBar({
   resultCount: number;
   onFilters: (filters: PriceFilters) => void;
   onPendingStatus: (status: PriceRequest["status"] | "") => void;
+  onRequestFrom: (date: string) => void;
+  onRequestTo: (date: string) => void;
   onHistoryFrom: (date: string) => void;
   onHistoryTo: (date: string) => void;
   onHistoryApprover: (name: string) => void;
@@ -689,6 +721,8 @@ function PriceFilterBar({
     filters.payment ||
     filters.branch ||
     pendingStatus ||
+    requestFrom ||
+    requestTo ||
     historyFrom ||
     historyTo ||
     historyApprover,
@@ -760,40 +794,55 @@ function PriceFilterBar({
           onChange={(branch) => patch({ branch })}
         />
         {tab === "pending" && (
-          <FilterSelect
-            label="สถานะคำขอ"
-            value={pendingStatus}
-            emptyLabel="ทุกสถานะ"
-            options={[
-              { id: "PENDING_PRICE", label: requestStatusLabel.PENDING_PRICE },
-              {
-                id: "PENDING_APPROVAL",
-                label: requestStatusLabel.PENDING_APPROVAL,
-              },
-              { id: "RETURNED", label: requestStatusLabel.RETURNED },
-            ]}
-            onChange={(status) =>
-              onPendingStatus(status as PriceRequest["status"] | "")
-            }
-          />
+          <>
+            <FilterSelect
+              label="สถานะคำขอ"
+              value={pendingStatus}
+              emptyLabel="ทุกสถานะ"
+              options={[
+                { id: "PENDING_PRICE", label: requestStatusLabel.PENDING_PRICE },
+                {
+                  id: "PENDING_APPROVAL",
+                  label: requestStatusLabel.PENDING_APPROVAL,
+                },
+                { id: "RETURNED", label: requestStatusLabel.RETURNED },
+              ]}
+              onChange={(status) =>
+                onPendingStatus(status as PriceRequest["status"] | "")
+              }
+            />
+            <label className="pricing-filter-control">
+              <span>เปิดบิลตั้งแต่วันที่</span>
+              <DateInput
+                value={requestFrom}
+                onChange={onRequestFrom}
+              />
+            </label>
+            <label className="pricing-filter-control">
+              <span>ถึงวันที่</span>
+              <DateInput
+                min={requestFrom || undefined}
+                value={requestTo}
+                onChange={onRequestTo}
+              />
+            </label>
+          </>
         )}
         {tab === "history" && (
           <>
             <label className="pricing-filter-control">
               <span>ตั้งแต่วันที่</span>
-              <input
-                type="date"
+              <DateInput
                 value={historyFrom}
-                onChange={(event) => onHistoryFrom(event.target.value)}
+                onChange={onHistoryFrom}
               />
             </label>
             <label className="pricing-filter-control">
               <span>ถึงวันที่</span>
-              <input
-                type="date"
+              <DateInput
                 min={historyFrom || undefined}
                 value={historyTo}
-                onChange={(event) => onHistoryTo(event.target.value)}
+                onChange={onHistoryTo}
               />
             </label>
             <FilterSelect
@@ -812,7 +861,7 @@ function PriceFilterBar({
       <p className="pricing-filter-note">
         {tab === "batch"
           ? "เลือกรายการด้วยตัวกรองด้านบน แล้วตรวจราคาใหม่ก่อนยืนยัน"
-          : "การแก้ราคาจะสร้างเวอร์ชันใหม่เสมอ บิลเก่าไม่เปลี่ยน"}
+          : "ราคาที่ระบุแล้วในบิลเก่าไม่เปลี่ยน ยกเว้นบิลที่ยังรอราคา"}
       </p>
     </section>
   );
@@ -974,7 +1023,9 @@ function CurrentPrices({
                 <td className="price-number">฿ {money(version?.price || 0)}</td>
                 <td>
                   v{version?.version}
-                  <small>เริ่ม {version?.effectiveFrom}</small>
+                  <small>
+                    เริ่ม {version?.effectiveFrom ? thaiDate(version.effectiveFrom) : "–"}
+                  </small>
                 </td>
                 <td className="ops-actions">
                   <IconButton
@@ -1014,6 +1065,7 @@ function PendingPrices({
         <thead>
           <tr>
             <th>เลขบิล</th>
+            <th>วันที่เปิดบิล</th>
             <th>ผู้รับ / ผู้ส่ง</th>
             <th>สินค้า / หน่วย</th>
             <th>เงื่อนไข</th>
@@ -1030,6 +1082,7 @@ function PendingPrices({
               <td>
                 <strong>{row.billNumber || "ยังไม่ออกเลข"}</strong>
               </td>
+              <td>{thaiDate(row.requestedAt)}</td>
               <td>
                 {partyName(registry.parties, row.receiverId)}
                 <small>{partyName(registry.parties, row.senderId)}</small>
@@ -1055,7 +1108,7 @@ function PendingPrices({
                   ? "–"
                   : `฿ ${money(row.actualCollectedAmount)}`}
               </td>
-              <td>{new Date(row.requestedAt).toLocaleDateString("th-TH")}</td>
+              <td>{thaiDate(row.requestedAt)}</td>
               <td>
                 <Button
                   className="compact primary"
@@ -1106,10 +1159,7 @@ function PriceHistory({
             return (
               <tr key={version.id}>
                 <td>
-                  {new Date(version.createdAt).toLocaleString("th-TH", {
-                    dateStyle: "short",
-                    timeStyle: "short",
-                  })}
+                  {thaiDate(version.createdAt)} · {thaiTime(version.createdAt)}
                 </td>
                 <td>
                   <strong>
@@ -1186,11 +1236,10 @@ function PriceEditor({
           />
         </Field>
         <Field label="เริ่มใช้วันที่" required>
-          <input
+          <DateInput
             required
-            type="date"
             value={effectiveFrom}
-            onChange={(event) => setEffectiveFrom(event.target.value)}
+            onChange={setEffectiveFrom}
           />
         </Field>
         <Field label="เหตุผลที่แก้ราคา" required>

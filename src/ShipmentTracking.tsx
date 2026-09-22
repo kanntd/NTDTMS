@@ -34,6 +34,7 @@ import {
   type ShipmentDetail,
 } from "./types";
 import { Button, Empty, IconButton, Loading, Pagination } from "./ui";
+import DateInput from "./DateInput";
 
 const PAGE_SIZE = 20;
 
@@ -686,12 +687,11 @@ function FilterDate({
   return (
     <label className="shipment-filter-control">
       <span>{label}</span>
-      <input
-        type="date"
+      <DateInput
         value={value}
         min={min}
         max={max}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={onChange}
       />
     </label>
   );

@@ -457,11 +457,18 @@ export function currentPrice(state: OperationsState, key: string) {
 }
 
 export function pendingPriceRequest(state: OperationsState, key: string) {
+  const agreement = state.agreements.find(
+    (row) => row.active && row.key === key,
+  );
+  const approvedAt = state.priceVersions.find(
+    (row) => row.id === agreement?.currentVersionId,
+  )?.createdAt;
   return state.priceRequests.find(
     (row) =>
       row.key === key &&
       row.status !== "RESOLVED" &&
-      row.status !== "CANCELLED",
+      row.status !== "CANCELLED" &&
+      (!approvedAt || row.requestedAt > approvedAt),
   );
 }
 

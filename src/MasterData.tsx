@@ -21,6 +21,8 @@ import {
   UsersRound,
 } from "lucide-react";
 import { useWorkspace } from "./context";
+import DateInput from "./DateInput";
+import { thaiDate } from "./domain";
 import { BRANCH_OPTIONS, PROVINCE_OPTIONS } from "./intakeData";
 import {
   catalogName,
@@ -1079,7 +1081,7 @@ function EmployeeTable({
               <td>
                 {row.licenseNo || "–"}
                 {row.licenseExpiry && (
-                  <small>หมดอายุ {row.licenseExpiry}</small>
+                  <small>หมดอายุ {thaiDate(row.licenseExpiry)}</small>
                 )}
               </td>
               <td>
@@ -1692,11 +1694,10 @@ function EmployeeEditor({
             />
           </Field>
           <Field label="วันหมดอายุใบขับขี่">
-            <input
-              type="date"
+            <DateInput
               value={form.licenseExpiry}
-              onChange={(e) =>
-                setForm({ ...form, licenseExpiry: e.target.value })
+              onChange={(licenseExpiry) =>
+                setForm({ ...form, licenseExpiry })
               }
             />
           </Field>
@@ -1969,14 +1970,13 @@ function DocumentEditor({
               </span>
             </Field>
             <Field label="วันหมดอายุ (ถ้ามี)">
-              <input
-                type="date"
+              <DateInput
                 value={row.expiresOn}
-                onChange={(event) =>
+                onChange={(expiresOn) =>
                   onChange(
                     rows.map((item) =>
                       item.id === row.id
-                        ? { ...item, expiresOn: event.target.value }
+                        ? { ...item, expiresOn }
                         : item,
                     ),
                   )
@@ -2035,14 +2035,13 @@ function DocumentEditor({
               </label>
             </Field>
             <Field label="วันหมดอายุ (ถ้ามี)">
-              <input
-                type="date"
+              <DateInput
                 value={draft.expiresOn}
-                onChange={(event) =>
+                onChange={(expiresOn) =>
                   setDrafts((current) =>
                     current.map((row) =>
                       row.id === draft.id
-                        ? { ...row, expiresOn: event.target.value }
+                        ? { ...row, expiresOn }
                         : row,
                     ),
                   )

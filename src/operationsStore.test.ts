@@ -170,6 +170,58 @@ describe("operational master data", () => {
     expect(pendingPriceRequest(state, "pair-key")).toBeUndefined();
   });
 
+  it("ignores old requests after a standard price is approved", () => {
+    const state = emptyState();
+    state.agreements.push({
+      id: "agreement",
+      key: "pair-key",
+      receiverId: "receiver",
+      senderId: "sender",
+      catalogId: "shoes:bag",
+      payment: "CASH_DESTINATION",
+      branch: "STI",
+      currentVersionId: "version",
+      active: true,
+    });
+    state.priceVersions.push({
+      id: "version",
+      agreementId: "agreement",
+      version: 1,
+      price: 80,
+      effectiveFrom: "2026-09-14",
+      reason: "approved",
+      source: "PRICE_REQUEST",
+      createdAt: "2026-09-14T10:00:00.000Z",
+      approvedBy: "accountant",
+    });
+    const request = {
+      id: "old-request",
+      key: "pair-key",
+      receiverId: "receiver",
+      senderId: "sender",
+      catalogId: "shoes:bag",
+      payment: "CASH_DESTINATION" as const,
+      branch: "STI",
+      billNumber: "B0126000001",
+      quantity: 1,
+      proposedPrice: null,
+      approvedPrice: null,
+      actualCollectedAmount: null,
+      status: "PENDING_PRICE" as const,
+      requestedAt: "2026-09-13T10:00:00.000Z",
+      note: "",
+    };
+    state.priceRequests.push(request);
+    expect(currentPrice(state, "pair-key")).toBe(80);
+    expect(pendingPriceRequest(state, "pair-key")).toBeUndefined();
+    state.priceRequests.push({
+      ...request,
+      id: "new-request",
+      requestedAt: "2026-09-15T10:00:00.000Z",
+    });
+    expect(pendingPriceRequest(state, "pair-key")?.id).toBe("new-request");
+  });
+
   it("derives the current driver from an open assignment", () => {
     const state = emptyState();
     state.employees.push({

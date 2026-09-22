@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isWithinPriceHistoryRange, matchesPriceFilters } from "./Pricing";
+import {
+  isWithinPriceHistoryRange,
+  isWithinPriceRequestRange,
+  matchesPriceFilters,
+} from "./Pricing";
 
 const row = {
   receiverId: "receiver-a",
@@ -49,5 +53,12 @@ describe("pricing filters", () => {
     ).toBe(true);
     expect(isWithinPriceHistoryRange(createdAt, "2026-09-15", "")).toBe(false);
     expect(isWithinPriceHistoryRange(createdAt, "", "2026-09-13")).toBe(false);
+  });
+
+  it("filters bill dates inclusively in Bangkok time", () => {
+    const openedAt = "2026-09-14T18:30:00.000Z";
+    expect(isWithinPriceRequestRange(openedAt, "2026-09-15", "2026-09-15")).toBe(true);
+    expect(isWithinPriceRequestRange(openedAt, "2026-09-16", "")).toBe(false);
+    expect(isWithinPriceRequestRange(openedAt, "", "2026-09-14")).toBe(false);
   });
 });

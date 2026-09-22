@@ -117,13 +117,17 @@ export const localDate = (date = new Date()) =>
     month: "2-digit",
     day: "2-digit",
   }).format(date);
-export const thaiDate = (date: string | Date, full = false) =>
-  new Intl.DateTimeFormat("th-TH", {
+export const thaiDate = (date: string | Date, _full = false) => {
+  const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Bangkok",
-    day: "numeric",
-    month: full ? "long" : "short",
+    day: "2-digit",
+    month: "2-digit",
     year: "numeric",
-  }).format(new Date(date));
+  }).formatToParts(new Date(date));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("day")}/${part("month")}/${String(Number(part("year")) + 543).slice(-2)}`;
+};
 export const thaiTime = (date: string) =>
   new Intl.DateTimeFormat("th-TH", {
     timeZone: "Asia/Bangkok",

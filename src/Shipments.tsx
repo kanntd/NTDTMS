@@ -11,6 +11,7 @@ import {
 import { useWorkspace } from "./context";
 import { Button, Empty, IconButton, Loading, Pagination } from "./ui";
 import { downloadCsv, localDate, money, thaiDate, thaiTime } from "./domain";
+import DateInput from "./DateInput";
 import {
   PAYMENT_LABELS,
   STATUS_LABELS,
@@ -277,12 +278,11 @@ function ShipmentRegister({
               </option>
             ))}
           </select>
-          <input
-            type="date"
+          <DateInput
             aria-label="วันที่รับสินค้า"
             value={date}
-            onChange={(e) => {
-              setDate(e.target.value);
+            onChange={(value) => {
+              setDate(value);
               setPage(0);
             }}
           />

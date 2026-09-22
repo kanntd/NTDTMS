@@ -2679,6 +2679,38 @@ table {
   max-width: 152px;
   font-size: 13px;
 }
+.date-input {
+  position: relative;
+  display: inline-flex;
+  width: 100%;
+  min-width: 132px;
+}
+.date-input > input[type="text"] {
+  width: 100%;
+  padding-right: 38px;
+}
+.date-input-picker {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  place-items: center;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+.date-input-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
 .table-toolbar input,
 .table-toolbar select {
   font-size: 13px;
