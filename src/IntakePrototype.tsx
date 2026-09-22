@@ -16,7 +16,8 @@ import {
 import { Button, Field, IconButton, Loading, Modal } from "./ui";
 import { useWorkspace } from "./context";
 import { money, thaiDate } from "./domain";
-import { BRANCH_OPTIONS, agreedPrice } from "./intakeData";
+import { agreedPrice } from "./intakeData";
+import { destinationBranches } from "./branchRoutes";
 import { intakeAmounts, onePercent } from "./intakeMath";
 import { refreshDraftLinePrice } from "./intakeDraftPrice";
 import { nextLocalBillNumber } from "./billNumber";
@@ -506,7 +507,8 @@ export default function IntakePrototype() {
       },
     }));
   }, [loginOpener.id]);
-  const branch = BRANCH_OPTIONS.find((b) => b.code === f.branch);
+  const branchOptions = destinationBranches(w.branches, w.zones);
+  const branch = branchOptions.find((b) => b.code === f.branch);
   const before = intakeAmounts(f.lines, f.discount, 0, false);
   const withheld = f.withholding
     ? (f.taxOverride ?? onePercent(before.total))
@@ -620,7 +622,7 @@ export default function IntakePrototype() {
     const next = {
       ...blank(f.openedByEmployeeId),
       receiverId: id,
-      branch: BRANCH_OPTIONS.some((b) => b.code === state.defaults[id])
+      branch: branchOptions.some((b) => b.code === state.defaults[id])
         ? state.defaults[id]
         : "",
     };
@@ -1138,7 +1140,7 @@ export default function IntakePrototype() {
                   }
                 >
                   <option value="">เลือกสาขา</option>
-                  {BRANCH_OPTIONS.map((b) => (
+                  {branchOptions.map((b) => (
                     <option key={b.code} value={b.code}>
                       {b.name}
                     </option>
@@ -1743,6 +1745,8 @@ function BillPreview({
   bill: Bill;
   onClose: () => void;
 }) {
+  const w = useWorkspace();
+  const branchOptions = destinationBranches(w.branches, w.zones);
   return (
     <Modal title="ใบรับสินค้า / ใบขนส่ง" wide onClose={onClose}>
       <div className="desk-print-actions">
@@ -1764,7 +1768,7 @@ function BillPreview({
         <p>
           กรุงเทพฯ →{" "}
           {
-            BRANCH_OPTIONS.find((branch) => branch.code === b.draft.branch)
+            branchOptions.find((branch) => branch.code === b.draft.branch)
               ?.name
           }
         </p>

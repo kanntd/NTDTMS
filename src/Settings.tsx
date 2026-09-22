@@ -574,12 +574,14 @@ export default function Settings() {
             }
           >
             <div className="two-fields">
-              <Field label="รหัสเส้นทางเดิม" required>
+              <Field label="รหัสเส้นทาง" required>
                 <input
                   required
+                  pattern="[A-Za-z0-9]{2,8}"
                   maxLength={8}
                   value={branch.code}
-                  readOnly={!creatingBranch}
+                  readOnly={!w.demo && !creatingBranch}
+                  title={!w.demo && !creatingBranch ? "รอปรับฐานข้อมูลก่อนแก้รหัสสาขาเดิม" : undefined}
                   onChange={(event) =>
                     setBranch({
                       ...branch,

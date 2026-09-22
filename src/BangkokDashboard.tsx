@@ -2,14 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Clock3, LoaderCircle, RefreshCw, Truck } from "lucide-react";
 import { useWorkspace } from "./context";
 import { money, number, thaiDate } from "./domain";
-import { BRANCH_OPTIONS } from "./intakeData";
+import { destinationBranches, destinationCodeForDistrict } from "./branchRoutes";
 import { Button } from "./ui";
 import {
   summarizeBangkokQueue,
   type BangkokBranchDefinition,
   type BangkokQueueBill,
 } from "./dashboardQueue";
-const BRANCH_ORDER = ["KPT", "PLK", "STI", "SWL"];
 
 export default function BangkokDashboard({
   onOpenBranch,
@@ -21,17 +20,8 @@ export default function BangkokDashboard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const branches = useMemo<BangkokBranchDefinition[]>(
-    () =>
-      BRANCH_ORDER.map((code) => {
-        const local = BRANCH_OPTIONS.find((branch) => branch.code === code);
-        const live = w.zones.find((zone) => zone.code === code);
-        return {
-          code,
-          name: live?.name || local?.name || code,
-          color: live?.color || local?.color || "#5f7369",
-        };
-      }),
-    [w.zones],
+    () => destinationBranches(w.branches, w.zones),
+    [w.branches, w.zones],
   );
 
   const refresh = useCallback(async () => {
@@ -41,14 +31,11 @@ export default function BangkokDashboard({
       const queue = await w.service.loadingQueue();
       setBills(
         queue.map((shipment) => {
-          const sawankhalok = BRANCH_OPTIONS.find(
-            (branch) => branch.code === "SWL",
-          );
           return {
             id: shipment.id,
             branchCode:
               shipment.destination_branch_code ||
-              (shipment.district_id === sawankhalok?.districtId ? "SWL" : "") ||
+              destinationCodeForDistrict(shipment.district_id, w.branches) ||
               w.zones.find((zone) => zone.id === shipment.zone_id)?.code ||
               "",
             openedAt: shipment.received_at,
@@ -64,7 +51,7 @@ export default function BangkokDashboard({
     } finally {
       setLoading(false);
     }
-  }, [w.service, w.zones]);
+  }, [w.service, w.zones, w.branches]);
 
   useEffect(() => {
     void refresh();

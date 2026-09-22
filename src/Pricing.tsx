@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useWorkspace } from "./context";
 import { BRANCH_OPTIONS } from "./intakeData";
+import { destinationBranches } from "./branchRoutes";
 import {
   catalogName,
   INTAKE_STORAGE_KEY,
@@ -676,6 +677,8 @@ function PriceFilterBar({
   onHistoryApprover: (name: string) => void;
   onClear: () => void;
 }) {
+  const w = useWorkspace();
+  const branches = destinationBranches(w.branches, w.zones);
   const patch = (next: Partial<PriceFilters>) =>
     onFilters({ ...filters, ...next });
   const hasAnyFilter = Boolean(
@@ -750,7 +753,7 @@ function PriceFilterBar({
           label="สาขาปลายทาง"
           value={filters.branch}
           emptyLabel="ทุกสาขา"
-          options={BRANCH_OPTIONS.map((row) => ({
+          options={branches.map((row) => ({
             id: row.code,
             label: row.name,
           }))}

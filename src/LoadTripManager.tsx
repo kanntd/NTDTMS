@@ -359,9 +359,9 @@ export default function LoadTripManager({
             <table className="data-table trip-table">
               <thead>
                 <tr>
-                  <th>เลขเที่ยว / วันที่</th>
+                  <th>ทะเบียนรถ / เลขเที่ยว</th>
                   <th>สาขาปลายทาง</th>
-                  <th>ทะเบียนรถ</th>
+                  <th>วันที่ขึ้นรถ</th>
                   <th>พนักงานขับรถ</th>
                   <th className="numeric">จำนวนบิล</th>
                   <th className="numeric">จำนวนของ</th>
@@ -375,11 +375,11 @@ export default function LoadTripManager({
                   return (
                     <tr key={trip.id}>
                       <td>
-                        <strong>{trip.manifestNo}</strong>
-                        <small>{thaiDate(trip.loadedAt)}</small>
+                        <strong>{vehicleNo(trip)}</strong>
+                        <small>{trip.manifestNo}</small>
                       </td>
                       <td>{branchName(trip)}</td>
-                      <td>{vehicleNo(trip)}</td>
+                      <td>{thaiDate(trip.loadedAt)}</td>
                       <td>{driverName(trip)}</td>
                       <td className="numeric">
                         {number(uniqueBillCount(lines))}
@@ -416,10 +416,11 @@ export default function LoadTripManager({
       {selectedTrip && (
         <Modal
           wide
-          title={`${editing ? "แก้ไข" : "รายละเอียด"} ${selectedTrip.manifestNo}`}
+          title={`${editing ? "แก้ไข" : "รายละเอียด"} ทะเบียน ${vehicleNo(selectedTrip)}`}
           onClose={() => setSelectedTrip(null)}
         >
           <div className="modal-body trip-detail">
+            <p className="muted">เลขเที่ยว {selectedTrip.manifestNo}</p>
             <div className="trip-detail-summary">
               <div>
                 <span>สาขาปลายทาง</span>

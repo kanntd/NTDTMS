@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { useWorkspace } from "./context";
 import { localDate, money, number, thaiDate } from "./domain";
-import { BRANCH_OPTIONS } from "./intakeData";
+import { destinationBranches, destinationCodeForDistrict } from "./branchRoutes";
 import { billNumberPrefix } from "./billNumber";
 import LoadTripManager from "./LoadTripManager";
 import { currentDriver, loadOperations } from "./operationsStore";
@@ -48,16 +48,14 @@ import {
 type SortMode = "OLDEST" | "RECEIVER" | "SENDER" | "NEWEST" | "QUANTITY_DESC";
 type AgeFilter = "" | "0" | "1" | "2" | "3" | "MORE_THAN_3";
 
-const BRANCH_ORDER = ["KPT", "PLK", "STI", "SWL"];
-
 function branchCode(
   row: LoadingQueueRecord,
   zones: ReturnType<typeof useWorkspace>["zones"],
+  branches: ReturnType<typeof useWorkspace>["branches"],
 ) {
-  const sawankhalok = BRANCH_OPTIONS.find((item) => item.code === "SWL");
   return (
     row.destination_branch_code ||
-    (row.district_id === sawankhalok?.districtId ? "SWL" : "") ||
+    destinationCodeForDistrict(row.district_id, branches) ||
     zones.find((zone) => zone.id === row.zone_id)?.code ||
     ""
   );
@@ -191,17 +189,8 @@ export default function LoadingWork({
   }, [w.revision]);
 
   const branches = useMemo(
-    () =>
-      BRANCH_ORDER.map((code) => {
-        const local = BRANCH_OPTIONS.find((item) => item.code === code);
-        const live = w.zones.find((zone) => zone.code === code);
-        return {
-          code,
-          name: live?.name || local?.name || code,
-          color: live?.color || local?.color || "#5f7369",
-        };
-      }),
-    [w.zones],
+    () => destinationBranches(w.branches, w.zones),
+    [w.branches, w.zones],
   );
 
   const dashboard = useMemo(
@@ -209,7 +198,7 @@ export default function LoadingWork({
       summarizeLoadingDashboard(
         rows.map((row) => ({
           id: row.id,
-          branchCode: branchCode(row, w.zones),
+          branchCode: branchCode(row, w.zones, w.branches),
           quantity: row.total_quantity,
           amount: row.total_amount,
           paymentMode: row.payment_mode,
@@ -217,12 +206,12 @@ export default function LoadingWork({
         })),
         branches,
       ),
-    [rows, branches, w.zones],
+    [rows, branches, w.zones, w.branches],
   );
 
   const branchRows = useMemo(
-    () => rows.filter((row) => !branch || branchCode(row, w.zones) === branch),
-    [rows, branch, w.zones],
+    () => rows.filter((row) => !branch || branchCode(row, w.zones, w.branches) === branch),
+    [rows, branch, w.zones, w.branches],
   );
   const districts = useMemo(
     () => sortedUnique(branchRows.map((row) => districtName(row, w.zones))),
@@ -335,7 +324,7 @@ export default function LoadingWork({
 
   const selectedRows = rows.filter((row) => selected.has(row.id));
   const selectedBranches = new Set(
-    selectedRows.map((row) => branchCode(row, w.zones)),
+    selectedRows.map((row) => branchCode(row, w.zones, w.branches)),
   );
   const mixedBranches = selectedBranches.size > 1;
   const selectedQuantity = selectedRows.reduce(
@@ -445,7 +434,7 @@ export default function LoadingWork({
       w.toast(`ไม่พบบิล ${shipmentNo || billEntry} ในคิวรอขึ้นรถ`, true);
       return;
     }
-    const destination = branchCode(row, w.zones);
+    const destination = branchCode(row, w.zones, w.branches);
     if (destination !== branch) {
       const destinationName = branches.find(
         (item) => item.code === destination,
@@ -517,8 +506,8 @@ export default function LoadingWork({
 
   function renderBillRow(row: LoadingQueueRecord) {
     const billAge = calendarAgeInBangkok(row.received_at);
-    const metadata = BRANCH_OPTIONS.find(
-      (item) => item.code === branchCode(row, w.zones),
+    const metadata = branches.find(
+      (item) => item.code === branchCode(row, w.zones, w.branches),
     );
     return (
       <tr
@@ -573,7 +562,7 @@ export default function LoadingWork({
         <td>
           {districtName(row, w.zones)}
           <small className="loading-branch" style={{ color: metadata?.color }}>
-            {metadata?.name || branchCode(row, w.zones)}
+            {metadata?.name || branchCode(row, w.zones, w.branches)}
           </small>
         </td>
         <td>

@@ -196,7 +196,7 @@ export function createService(demo: boolean) {
       if (due < shipment.paid_amount)
         throw new Error("ยอดใหม่ต่ำกว่าเงินที่รับแล้ว");
       const branch = BRANCH_OPTIONS.find(
-        (option) => option.code === input.destination_branch_code,
+        (option) => state.branches.find((item) => item.id === `branch-${option.code.toLowerCase()}`)?.code === input.destination_branch_code || option.code === input.destination_branch_code,
       );
       Object.assign(shipment, {
         sender_party_id: input.sender_id,
@@ -777,6 +777,11 @@ export function createService(demo: boolean) {
       if (kind === "branch_save") {
         const id = String(data.id);
         const previous = state.branches.find((branch) => branch.id === id);
+        const code = String(data.code).trim().toUpperCase();
+        if (!/^[A-Z0-9]{2,8}$/.test(code))
+          throw new Error("รหัสเส้นทางต้องเป็นตัวอักษรอังกฤษหรือตัวเลข 2-8 ตัว");
+        if (state.branches.some((branch) => branch.id !== id && branch.code === code))
+          throw new Error("รหัสเส้นทางนี้ถูกใช้โดยสาขาอื่นแล้ว");
         if (
           previous?.document_code_locked_at &&
           previous.document_code !== String(data.document_code)
@@ -793,7 +798,7 @@ export function createService(demo: boolean) {
           throw new Error("รหัสออกบิลนี้ถูกใช้โดยสาขาอื่นแล้ว");
         const value = {
           id,
-          code: String(data.code).toUpperCase(),
+          code,
           document_code: String(data.document_code).toUpperCase(),
           name: String(data.name),
           branch_kind:
@@ -806,6 +811,15 @@ export function createService(demo: boolean) {
         const index = state.branches.findIndex((branch) => branch.id === id);
         if (index >= 0) state.branches[index] = value;
         else state.branches.push(value);
+        if (previous && previous.code !== code) {
+          state.shipments.forEach((shipment) => {
+            if (shipment.destination_branch_code === previous.code)
+              shipment.destination_branch_code = code;
+          });
+          state.zones.forEach((zone) => {
+            if (zone.code === previous.code) zone.code = code;
+          });
+        }
       }
       if (kind === "branch_delete") {
         const branch = state.branches.find((row) => row.id === data.id);

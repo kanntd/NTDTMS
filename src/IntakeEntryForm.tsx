@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { Check, Plus } from "lucide-react";
 import { Button, EditableSelect, Field, Modal } from "./ui";
-import { BRANCH_OPTIONS, PROVINCE_OPTIONS } from "./intakeData";
+import { PROVINCE_OPTIONS } from "./intakeData";
+import { useWorkspace } from "./context";
+import { destinationBranches } from "./branchRoutes";
 import {
   measurementFields,
   normalizeEntry,
@@ -55,6 +57,8 @@ export default function IntakeEntryForm({
   onParty: (party: IntakeParty, branch: string) => void;
   onProduct: (entry: ProductEntry) => void;
 }) {
+  const w = useWorkspace();
+  const branches = destinationBranches(w.branches, w.zones);
   const [name, setName] = useState(query);
   const [prefix, setPrefix] = useState("");
   const [taxId, setTaxId] = useState("");
@@ -332,7 +336,7 @@ export default function IntakeEntryForm({
                   {mode === "sender" && (
                     <option value="BKK">กรุงเทพฯ (ต้นทาง)</option>
                   )}
-                  {BRANCH_OPTIONS.map((b) => (
+                  {branches.map((b) => (
                     <option key={b.code} value={b.code}>
                       {b.name}
                     </option>

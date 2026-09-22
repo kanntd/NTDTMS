@@ -20,7 +20,7 @@ import {
   thaiDate,
   thaiTime,
 } from "./domain";
-import { BRANCH_OPTIONS } from "./intakeData";
+import { destinationBranches } from "./branchRoutes";
 import { loadIntakeRegistry } from "./intakeRegistry";
 import { loadOperations } from "./operationsStore";
 import { loadRemoteWorkspace } from "./remoteWorkspace";
@@ -412,7 +412,7 @@ export default function ShipmentTracking({
             label="สาขาปลายทาง"
             value={filters.branch}
             emptyLabel="ทุกสาขา"
-            options={BRANCH_OPTIONS.map((branch) => ({
+            options={destinationBranches(w.branches, w.zones).map((branch) => ({
               id: branch.code,
               label: branch.name,
             }))}
