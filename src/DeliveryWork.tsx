@@ -15,7 +15,11 @@ import { useWorkspace } from "./context";
 import { destinationBranches } from "./branchRoutes";
 import { money, number } from "./domain";
 import { Button, Field, Loading } from "./ui";
-import { PAYMENT_LABELS, type DeliveryInput, type LoadTripAllocation } from "./types";
+import {
+  PAYMENT_LABELS,
+  type DeliveryInput,
+  type LoadTripAllocation,
+} from "./types";
 
 type QueueBill = {
   id: string;
@@ -24,7 +28,12 @@ type QueueBill = {
   senderName: string;
   paymentMode: NonNullable<LoadTripAllocation["paymentMode"]>;
   expectedAmount: number;
-  items: Array<{ id: string; description: string; unit: string; quantity: number }>;
+  items: Array<{
+    id: string;
+    description: string;
+    unit: string;
+    quantity: number;
+  }>;
 };
 
 const RESULTS: Array<[DeliveryInput["result"], string]> = [
@@ -42,12 +51,16 @@ export default function DeliveryWork() {
     () => destinationBranches(w.branches, w.zones),
     [w.branches, w.zones],
   );
-  const profileBranch = w.branches.find((row) => row.id === w.profile.branch_id);
+  const profileBranch = w.branches.find(
+    (row) => row.id === w.profile.branch_id,
+  );
   const manager = ["owner", "admin"].includes(w.profile.role);
   const availableBranches = manager
     ? branches
     : branches.filter((row) => row.code === profileBranch?.code);
-  const [branchCode, setBranchCode] = useState(availableBranches[0]?.code || "");
+  const [branchCode, setBranchCode] = useState(
+    manager ? "" : availableBranches[0]?.code || "",
+  );
   const [bills, setBills] = useState<QueueBill[]>([]);
   const [entry, setEntry] = useState("");
   const [selected, setSelected] = useState<QueueBill | null>(null);
@@ -70,13 +83,17 @@ export default function DeliveryWork() {
       ]);
       const delivered = new Map<string, number>();
       deliveredLines.forEach((line) =>
-        delivered.set(line.itemId, (delivered.get(line.itemId) || 0) + line.quantity),
+        delivered.set(
+          line.itemId,
+          (delivered.get(line.itemId) || 0) + line.quantity,
+        ),
       );
       const grouped = new Map<string, QueueBill>();
       trips
         .filter(
           (trip) =>
-            trip.status === "RECEIVED" && trip.destinationBranchCode === branchCode,
+            trip.status === "RECEIVED" &&
+            (!branchCode || trip.destinationBranchCode === branchCode),
         )
         .flatMap((trip) => trip.allocations)
         .filter(
@@ -86,7 +103,10 @@ export default function DeliveryWork() {
             line.shipmentStatus !== "CANCELLED",
         )
         .forEach((line) => {
-          const remaining = Math.max(0, line.quantity - (delivered.get(line.itemId) || 0));
+          const remaining = Math.max(
+            0,
+            line.quantity - (delivered.get(line.itemId) || 0),
+          );
           if (remaining <= 0) return;
           const bill = grouped.get(line.shipmentId) || {
             id: line.shipmentId,
@@ -99,18 +119,22 @@ export default function DeliveryWork() {
           };
           const existing = bill.items.find((item) => item.id === line.itemId);
           if (existing) existing.quantity += remaining;
-          else bill.items.push({
-            id: line.itemId,
-            description: line.description,
-            unit: line.unit,
-            quantity: remaining,
-          });
-          bill.expectedAmount += (line.amount || 0) * (remaining / line.quantity);
+          else
+            bill.items.push({
+              id: line.itemId,
+              description: line.description,
+              unit: line.unit,
+              quantity: remaining,
+            });
+          bill.expectedAmount +=
+            (line.amount || 0) * (remaining / line.quantity);
           grouped.set(line.shipmentId, bill);
         });
-      setBills([...grouped.values()].sort((a, b) =>
-        a.receiverName.localeCompare(b.receiverName, "th"),
-      ));
+      setBills(
+        [...grouped.values()].sort((a, b) =>
+          a.receiverName.localeCompare(b.receiverName, "th"),
+        ),
+      );
     } catch (cause) {
       w.toast((cause as Error).message || "โหลดงานส่งสินค้าไม่สำเร็จ", true);
     } finally {
@@ -119,11 +143,12 @@ export default function DeliveryWork() {
   }
 
   useEffect(() => {
+    if (manager && !branchCode) return;
     if (!availableBranches.some((branch) => branch.code === branchCode))
       setBranchCode(availableBranches[0]?.code || "");
-  }, [availableBranches, branchCode]);
+  }, [availableBranches, branchCode, manager]);
   useEffect(() => {
-    if (branchCode) void refresh();
+    if (manager || branchCode) void refresh();
   }, [branchCode, w.revision]);
 
   function findBill() {
@@ -136,7 +161,9 @@ export default function DeliveryWork() {
     setSelected(bill);
     setResult("DELIVERED");
     setCollected(
-      bill.paymentMode === "CASH_DESTINATION" ? bill.expectedAmount.toFixed(2) : "",
+      bill.paymentMode === "CASH_DESTINATION"
+        ? bill.expectedAmount.toFixed(2)
+        : "",
     );
     setNote("");
     setEntry("");
@@ -183,75 +210,206 @@ export default function DeliveryWork() {
   }
 
   if (!availableBranches.length)
-    return <div className="empty-state"><Truck size={30} /><h2>บัญชีนี้ยังไม่ได้ผูกกับสาขาปลายทาง</h2></div>;
+    return (
+      <div className="empty-state">
+        <Truck size={30} />
+        <h2>บัญชีนี้ยังไม่ได้ผูกกับสาขาปลายทาง</h2>
+      </div>
+    );
 
   return (
     <div className="delivery-work">
       <div className="page-heading">
         <div>
-          <div className="breadcrumb">ปฏิบัติการสาขา <span>/</span> งานส่งสินค้า</div>
-          <h1>บันทึกผลส่งสินค้า <span className="heading-dot" /></h1>
+          <div className="breadcrumb">
+            ปฏิบัติการสาขา <span>/</span> งานส่งสินค้า
+          </div>
+          <h1>
+            บันทึกผลส่งสินค้า <span className="heading-dot" />
+          </h1>
           <p>คีย์เลขบิลแล้วบันทึกผลได้ทันที โดยไม่ต้องสร้างรอบส่ง</p>
         </div>
         <div className="heading-actions">
-          {availableBranches.length > 1 && (
-            <select value={branchCode} onChange={(event) => setBranchCode(event.target.value)}>
-              {availableBranches.map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}
-            </select>
-          )}
-          <Button onClick={() => void refresh()} disabled={loading}><RefreshCw size={17} />อัปเดตข้อมูล</Button>
+          <select
+            aria-label="กรองสาขาปลายทางของงานส่งสินค้า"
+            value={branchCode}
+            disabled={!manager}
+            onChange={(event) => setBranchCode(event.target.value)}
+          >
+            {manager && <option value="">ทุกสาขา</option>}
+            {availableBranches.map((branch) => (
+              <option key={branch.code} value={branch.code}>
+                {branch.name}
+              </option>
+            ))}
+          </select>
+          <Button onClick={() => void refresh()} disabled={loading}>
+            <RefreshCw size={17} />
+            อัปเดตข้อมูล
+          </Button>
         </div>
       </div>
 
       <div className="delivery-summary">
-        <article><ClipboardCheck size={22} /><span>บิลรอส่ง</span><strong>{number(bills.length)}</strong><small>บิล</small></article>
-        <article><PackageCheck size={22} /><span>สินค้ารอส่ง</span><strong>{number(bills.flatMap((bill) => bill.items).reduce((sum, item) => sum + item.quantity, 0))}</strong><small>ชิ้น</small></article>
-        <article><Banknote size={22} /><span>เงินสดปลายทาง</span><strong>฿{money(bills.filter((bill) => bill.paymentMode === "CASH_DESTINATION").reduce((sum, bill) => sum + bill.expectedAmount, 0))}</strong><small>{number(bills.filter((bill) => bill.paymentMode === "CASH_DESTINATION").length)} บิล</small></article>
+        <article>
+          <ClipboardCheck size={22} />
+          <span>บิลรอส่ง</span>
+          <strong>{number(bills.length)}</strong>
+          <small>บิล</small>
+        </article>
+        <article>
+          <PackageCheck size={22} />
+          <span>สินค้ารอส่ง</span>
+          <strong>
+            {number(
+              bills
+                .flatMap((bill) => bill.items)
+                .reduce((sum, item) => sum + item.quantity, 0),
+            )}
+          </strong>
+          <small>ชิ้น</small>
+        </article>
+        <article>
+          <Banknote size={22} />
+          <span>เงินสดปลายทาง</span>
+          <strong>
+            ฿
+            {money(
+              bills
+                .filter((bill) => bill.paymentMode === "CASH_DESTINATION")
+                .reduce((sum, bill) => sum + bill.expectedAmount, 0),
+            )}
+          </strong>
+          <small>
+            {number(
+              bills.filter((bill) => bill.paymentMode === "CASH_DESTINATION")
+                .length,
+            )}{" "}
+            บิล
+          </small>
+        </article>
       </div>
 
       <section className="delivery-entry-panel">
-        <header><ScanLine size={22} /><div><h2>พิมพ์หรือสแกนเลขบิล</h2><p>พิมพ์เฉพาะเลขท้ายได้ ระบบเติมเลขด้านหน้าให้อัตโนมัติ</p></div></header>
-        <form onSubmit={(event) => { event.preventDefault(); findBill(); }}>
+        <header>
+          <ScanLine size={22} />
+          <div>
+            <h2>พิมพ์หรือสแกนเลขบิล</h2>
+            <p>พิมพ์เฉพาะเลขท้ายได้ ระบบเติมเลขด้านหน้าให้อัตโนมัติ</p>
+          </div>
+        </header>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            findBill();
+          }}
+        >
           <span>{prefix}</span>
-          <input ref={inputRef} autoFocus aria-label="เลขบิลส่งสินค้า" placeholder="123 หรือสแกน QR" value={entry} onChange={(event) => setEntry(event.target.value)} />
-          <Button className="primary" type="submit" disabled={!entry.trim()}>ค้นหาบิล</Button>
+          <input
+            ref={inputRef}
+            autoFocus
+            aria-label="เลขบิลส่งสินค้า"
+            placeholder="123 หรือสแกน QR"
+            value={entry}
+            onChange={(event) => setEntry(event.target.value)}
+          />
+          <Button className="primary" type="submit" disabled={!entry.trim()}>
+            ค้นหาบิล
+          </Button>
         </form>
       </section>
 
-      {loading && !selected ? <Loading /> : selected ? (
+      {loading && !selected ? (
+        <Loading />
+      ) : selected ? (
         <section className="delivery-confirm-panel">
           <header>
-            <div><span>ตรวจสอบก่อนบันทึก</span><h2>{selected.shipmentNo}</h2></div>
-            <span className={`payment-mode ${selected.paymentMode}`}>{PAYMENT_LABELS[selected.paymentMode]}</span>
+            <div>
+              <span>ตรวจสอบก่อนบันทึก</span>
+              <h2>{selected.shipmentNo}</h2>
+            </div>
+            <span className={`payment-mode ${selected.paymentMode}`}>
+              {PAYMENT_LABELS[selected.paymentMode]}
+            </span>
           </header>
           <div className="delivery-parties">
-            <div><small>ผู้รับ</small><strong>{selected.receiverName}</strong></div>
-            <div><small>ผู้ส่ง</small><strong>{selected.senderName}</strong></div>
+            <div>
+              <small>ผู้รับ</small>
+              <strong>{selected.receiverName}</strong>
+            </div>
+            <div>
+              <small>ผู้ส่ง</small>
+              <strong>{selected.senderName}</strong>
+            </div>
           </div>
           <div className="delivery-items">
-            {selected.items.map((item) => <div key={item.id}><span>{item.description}</span><b>{number(item.quantity)} {item.unit}</b></div>)}
+            {selected.items.map((item) => (
+              <div key={item.id}>
+                <span>{item.description}</span>
+                <b>
+                  {number(item.quantity)} {item.unit}
+                </b>
+              </div>
+            ))}
           </div>
           <div className="delivery-form-grid">
             <Field label="ผลการส่ง">
-              <select value={result} onChange={(event) => setResult(event.target.value as DeliveryInput["result"])}>
-                {RESULTS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              <select
+                value={result}
+                onChange={(event) =>
+                  setResult(event.target.value as DeliveryInput["result"])
+                }
+              >
+                {RESULTS.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
               </select>
             </Field>
-            {result === "DELIVERED" && selected.paymentMode === "CASH_DESTINATION" && (
-              <Field label="ยอดเงินที่เก็บได้จริง">
-                <input type="number" min="0" step="0.01" value={collected} onChange={(event) => setCollected(event.target.value)} />
-              </Field>
-            )}
-            <Field label="รอบส่ง (ไม่บังคับ)"><input placeholder="เช่น รอบเช้า / รถ 81-2345" value={roundReference} onChange={(event) => setRoundReference(event.target.value)} /></Field>
-            <Field label="หมายเหตุ (ไม่บังคับ)"><input value={note} onChange={(event) => setNote(event.target.value)} /></Field>
+            {result === "DELIVERED" &&
+              selected.paymentMode === "CASH_DESTINATION" && (
+                <Field label="ยอดเงินที่เก็บได้จริง">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={collected}
+                    onChange={(event) => setCollected(event.target.value)}
+                  />
+                </Field>
+              )}
+            <Field label="รอบส่ง (ไม่บังคับ)">
+              <input
+                placeholder="เช่น รอบเช้า / รถ 81-2345"
+                value={roundReference}
+                onChange={(event) => setRoundReference(event.target.value)}
+              />
+            </Field>
+            <Field label="หมายเหตุ (ไม่บังคับ)">
+              <input
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+              />
+            </Field>
           </div>
           <footer>
-            <Button onClick={clearForm}><RotateCcw size={16} />ยกเลิก</Button>
-            <Button className="primary" busy={busy} onClick={() => void save()}><CheckCircle2 size={17} />บันทึกผลส่งสินค้า</Button>
+            <Button onClick={clearForm}>
+              <RotateCcw size={16} />
+              ยกเลิก
+            </Button>
+            <Button className="primary" busy={busy} onClick={() => void save()}>
+              <CheckCircle2 size={17} />
+              บันทึกผลส่งสินค้า
+            </Button>
           </footer>
         </section>
       ) : (
-        <div className="delivery-ready"><ScanLine size={34} /><strong>พร้อมรับเลขบิล</strong><span>รายการจะปรากฏตรงนี้หลังค้นหา</span></div>
+        <div className="delivery-ready">
+          <ScanLine size={34} />
+          <strong>พร้อมรับเลขบิล</strong>
+          <span>รายการจะปรากฏตรงนี้หลังค้นหา</span>
+        </div>
       )}
     </div>
   );
