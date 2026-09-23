@@ -278,6 +278,9 @@ export default function App() {
     ...(canOpen("intake")
       ? [{ id: "intake", label: "รับสินค้าและออกบิล", Icon: FilePlus2 }]
       : []),
+    ...(canOpen("shipments")
+      ? [{ id: "loading", label: "งานขึ้นรถ", Icon: PackageCheck }]
+      : []),
     ...(canOpen("shipments") && canUseDestinationDashboard
       ? [
           {
@@ -287,9 +290,6 @@ export default function App() {
           },
           { id: "delivery", label: "งานส่งสินค้า", Icon: ClipboardCheck },
         ]
-      : []),
-    ...(canOpen("shipments")
-      ? [{ id: "loading", label: "งานขึ้นรถ", Icon: PackageCheck }]
       : []),
     ...(canOpen("shipments")
       ? [

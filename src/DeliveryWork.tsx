@@ -7,7 +7,9 @@ import {
   RefreshCw,
   RotateCcw,
   ScanLine,
+  Search,
   Truck,
+  X,
 } from "lucide-react";
 import { billNumberPrefix } from "./billNumber";
 import { completeBillNumber } from "./loadingQueue";
@@ -28,6 +30,7 @@ type QueueBill = {
   senderName: string;
   paymentMode: NonNullable<LoadTripAllocation["paymentMode"]>;
   expectedAmount: number;
+  openedAt: string;
   items: Array<{
     id: string;
     description: string;
@@ -63,6 +66,13 @@ export default function DeliveryWork() {
   );
   const [bills, setBills] = useState<QueueBill[]>([]);
   const [entry, setEntry] = useState("");
+  const [search, setSearch] = useState("");
+  const [receiver, setReceiver] = useState("");
+  const [sender, setSender] = useState("");
+  const [product, setProduct] = useState("");
+  const [unit, setUnit] = useState("");
+  const [payment, setPayment] = useState("");
+  const [sort, setSort] = useState("OLDEST");
   const [selected, setSelected] = useState<QueueBill | null>(null);
   const [result, setResult] = useState<DeliveryInput["result"]>("DELIVERED");
   const [collected, setCollected] = useState("");
@@ -115,6 +125,7 @@ export default function DeliveryWork() {
             senderName: line.senderName,
             paymentMode: line.paymentMode || "CASH_ORIGIN",
             expectedAmount: 0,
+            openedAt: line.openedAt || "",
             items: [],
           };
           const existing = bill.items.find((item) => item.id === line.itemId);
@@ -151,13 +162,64 @@ export default function DeliveryWork() {
     if (manager || branchCode) void refresh();
   }, [branchCode, w.revision]);
 
-  function findBill() {
-    const shipmentNo = completeBillNumber(prefix, entry);
-    const bill = bills.find((row) => row.shipmentNo === shipmentNo);
-    if (!bill) {
-      w.toast(`ไม่พบบิล ${shipmentNo || entry} ในรายการรอส่งของสาขานี้`, true);
-      return;
-    }
+  const filterOptions = useMemo(
+    () => ({
+      receivers: [...new Set(bills.map((bill) => bill.receiverName))].sort(
+        (a, b) => a.localeCompare(b, "th"),
+      ),
+      senders: [...new Set(bills.map((bill) => bill.senderName))].sort((a, b) =>
+        a.localeCompare(b, "th"),
+      ),
+      products: [
+        ...new Set(
+          bills.flatMap((bill) => bill.items.map((item) => item.description)),
+        ),
+      ].sort((a, b) => a.localeCompare(b, "th")),
+      units: [
+        ...new Set(
+          bills.flatMap((bill) => bill.items.map((item) => item.unit)),
+        ),
+      ].sort((a, b) => a.localeCompare(b, "th")),
+    }),
+    [bills],
+  );
+  const visibleBills = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase("th");
+    return bills
+      .filter(
+        (bill) =>
+          (!query ||
+            [
+              bill.shipmentNo,
+              bill.receiverName,
+              bill.senderName,
+              ...bill.items.flatMap((item) => [item.description, item.unit]),
+            ]
+              .join(" ")
+              .toLocaleLowerCase("th")
+              .includes(query)) &&
+          (!receiver || bill.receiverName === receiver) &&
+          (!sender || bill.senderName === sender) &&
+          (!product ||
+            bill.items.some((item) => item.description === product)) &&
+          (!unit || bill.items.some((item) => item.unit === unit)) &&
+          (!payment || bill.paymentMode === payment),
+      )
+      .sort((a, b) => {
+        if (sort === "NEWEST")
+          return +new Date(b.openedAt) - +new Date(a.openedAt);
+        if (sort === "RECEIVER")
+          return a.receiverName.localeCompare(b.receiverName, "th");
+        if (sort === "QUANTITY")
+          return (
+            b.items.reduce((sum, item) => sum + item.quantity, 0) -
+            a.items.reduce((sum, item) => sum + item.quantity, 0)
+          );
+        return +new Date(a.openedAt) - +new Date(b.openedAt);
+      });
+  }, [bills, payment, product, receiver, search, sender, sort, unit]);
+
+  function selectBill(bill: QueueBill) {
     setSelected(bill);
     setResult("DELIVERED");
     setCollected(
@@ -167,6 +229,16 @@ export default function DeliveryWork() {
     );
     setNote("");
     setEntry("");
+  }
+
+  function findBill() {
+    const shipmentNo = completeBillNumber(prefix, entry);
+    const bill = bills.find((row) => row.shipmentNo === shipmentNo);
+    if (!bill) {
+      w.toast(`ไม่พบบิล ${shipmentNo || entry} ในรายการรอส่งของสาขานี้`, true);
+      return;
+    }
+    selectBill(bill);
   }
 
   function clearForm() {
@@ -319,6 +391,82 @@ export default function DeliveryWork() {
         </form>
       </section>
 
+      <section className="loading-filters delivery-filters">
+        <div className="input-icon loading-search">
+          <Search size={17} />
+          <input
+            aria-label="ค้นหาบิลรอส่ง"
+            placeholder="ค้นหาเลขบิล ผู้รับ ผู้ส่ง หรือสินค้า"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
+        <select
+          value={receiver}
+          onChange={(event) => setReceiver(event.target.value)}
+        >
+          <option value="">ผู้รับทั้งหมด</option>
+          {filterOptions.receivers.map((value) => (
+            <option key={value}>{value}</option>
+          ))}
+        </select>
+        <select
+          value={sender}
+          onChange={(event) => setSender(event.target.value)}
+        >
+          <option value="">ผู้ส่งทั้งหมด</option>
+          {filterOptions.senders.map((value) => (
+            <option key={value}>{value}</option>
+          ))}
+        </select>
+        <select
+          value={product}
+          onChange={(event) => setProduct(event.target.value)}
+        >
+          <option value="">สินค้าทั้งหมด</option>
+          {filterOptions.products.map((value) => (
+            <option key={value}>{value}</option>
+          ))}
+        </select>
+        <select value={unit} onChange={(event) => setUnit(event.target.value)}>
+          <option value="">หน่วยทั้งหมด</option>
+          {filterOptions.units.map((value) => (
+            <option key={value}>{value}</option>
+          ))}
+        </select>
+        <select
+          value={payment}
+          onChange={(event) => setPayment(event.target.value)}
+        >
+          <option value="">การชำระทั้งหมด</option>
+          {Object.entries(PAYMENT_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <select value={sort} onChange={(event) => setSort(event.target.value)}>
+          <option value="OLDEST">เก่าสุดก่อน</option>
+          <option value="NEWEST">ใหม่สุดก่อน</option>
+          <option value="RECEIVER">เรียงตามผู้รับ</option>
+          <option value="QUANTITY">จำนวนมากสุดก่อน</option>
+        </select>
+        <Button
+          title="ล้างตัวกรอง"
+          onClick={() => {
+            setSearch("");
+            setReceiver("");
+            setSender("");
+            setProduct("");
+            setUnit("");
+            setPayment("");
+            setSort("OLDEST");
+          }}
+        >
+          <X size={16} /> ล้าง
+        </Button>
+      </section>
+
       {loading && !selected ? (
         <Loading />
       ) : selected ? (
@@ -405,11 +553,61 @@ export default function DeliveryWork() {
           </footer>
         </section>
       ) : (
-        <div className="delivery-ready">
-          <ScanLine size={34} />
-          <strong>พร้อมรับเลขบิล</strong>
-          <span>รายการจะปรากฏตรงนี้หลังค้นหา</span>
-        </div>
+        <section className="table-card delivery-queue">
+          <div className="table-card-header">
+            <div>
+              <h2>รายการบิลรอส่ง</h2>
+              <p>
+                แสดง {number(visibleBills.length)} จาก {number(bills.length)}{" "}
+                บิล
+              </p>
+            </div>
+          </div>
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>เลขบิล</th>
+                  <th>ผู้รับ</th>
+                  <th>ผู้ส่ง</th>
+                  <th>สินค้า</th>
+                  <th>ชำระเงิน</th>
+                  <th>เลือก</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleBills.map((bill) => (
+                  <tr key={bill.id}>
+                    <td>
+                      <strong>{bill.shipmentNo}</strong>
+                    </td>
+                    <td>{bill.receiverName}</td>
+                    <td>{bill.senderName}</td>
+                    <td>
+                      {bill.items
+                        .map(
+                          (item) =>
+                            `${item.description} ${number(item.quantity)} ${item.unit}`,
+                        )
+                        .join(", ")}
+                    </td>
+                    <td>{PAYMENT_LABELS[bill.paymentMode]}</td>
+                    <td>
+                      <Button onClick={() => selectBill(bill)}>เลือกบิล</Button>
+                    </td>
+                  </tr>
+                ))}
+                {!visibleBills.length && (
+                  <tr>
+                    <td colSpan={6} className="empty-cell">
+                      ไม่พบบิลตามตัวกรอง
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
     </div>
   );
