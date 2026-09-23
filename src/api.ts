@@ -197,6 +197,54 @@ export async function listShipments(
     )
     .order("line_no");
   if (items.error) throw items.error;
+  const shipmentIds = rows.map((row) => row.id);
+  const lineResult = await supabase
+    .from("load_manifest_item_lines")
+    .select("shipment_id,manifest_id")
+    .eq("is_active", true)
+    .in("shipment_id", shipmentIds);
+  if (lineResult.error && !["42P01", "PGRST205"].includes(lineResult.error.code || ""))
+    throw lineResult.error;
+  const manifestIds = [
+    ...new Set((lineResult.data || []).map((row) => String(row.manifest_id))),
+  ];
+  const manifestResult = manifestIds.length
+    ? await supabase
+        .from("load_manifests")
+        .select("id,manifest_no,status,vehicle_id,loaded_at,received_at")
+        .in("id", manifestIds)
+        .neq("status", "CANCELLED")
+    : { data: [], error: null };
+  if (manifestResult.error) throw manifestResult.error;
+  const vehicleIds = [
+    ...new Set(
+      (manifestResult.data || [])
+        .map((row) => String(row.vehicle_id || ""))
+        .filter(Boolean),
+    ),
+  ];
+  const vehicleResult = vehicleIds.length
+    ? await supabase
+        .from("vehicle_assets")
+        .select("id,plate_no")
+        .in("id", vehicleIds)
+    : { data: [], error: null };
+  if (vehicleResult.error) throw vehicleResult.error;
+  const vehicles = new Map(
+    (vehicleResult.data || []).map((row) => [String(row.id), String(row.plate_no || "")]),
+  );
+  const manifests = new Map(
+    (manifestResult.data || []).map((row) => [String(row.id), row]),
+  );
+  const trackingByShipment = new Map<string, (typeof manifestResult.data)[number]>();
+  for (const line of lineResult.data || []) {
+    const manifest = manifests.get(String(line.manifest_id));
+    if (!manifest) continue;
+    const shipmentId = String(line.shipment_id);
+    const current = trackingByShipment.get(shipmentId);
+    if (!current || +new Date(manifest.loaded_at || 0) > +new Date(current.loaded_at || 0))
+      trackingByShipment.set(shipmentId, manifest);
+  }
   const byShipment = (items.data || []).reduce<Record<string, unknown[]>>(
     (groups, item) => {
       const id = String(item.shipment_id);
@@ -206,10 +254,21 @@ export async function listShipments(
     {},
   );
   return {
-    rows: rows.map((row) => ({
-      ...row,
-      items: (byShipment[row.id] || []) as Item[],
-    })),
+    rows: rows.map((row) => {
+      const manifest = trackingByShipment.get(row.id);
+      return {
+        ...row,
+        manifest_no: manifest ? String(manifest.manifest_no || "") : row.manifest_no,
+        loaded_at: manifest ? String(manifest.loaded_at || "") : row.loaded_at,
+        branch_received_at: manifest
+          ? String(manifest.received_at || "")
+          : row.branch_received_at,
+        vehicle_plate_no: manifest
+          ? vehicles.get(String(manifest.vehicle_id || "")) || ""
+          : row.vehicle_plate_no,
+        items: (byShipment[row.id] || []) as Item[],
+      };
+    }),
     count: r.count || 0,
   };
 }
@@ -589,7 +648,7 @@ export async function getLoadTrips(): Promise<LoadTripRecord[]> {
 export async function getDeliveryLines() {
   const result = await supabase
     .from("delivery_attempt_item_lines")
-    .select("shipment_id,shipment_item_id,quantity");
+    .select("shipment_id,shipment_item_id,quantity,created_at");
   if (result.error) {
     if (["42P01", "PGRST205"].includes(result.error.code || "")) return [];
     throw result.error;
@@ -598,7 +657,29 @@ export async function getDeliveryLines() {
     shipmentId: String(row.shipment_id),
     itemId: String(row.shipment_item_id),
     quantity: Number(row.quantity) || 0,
+    deliveredAt: String(row.created_at || ""),
   }));
+}
+export async function getCashDestinationCollections() {
+  const result = await supabase
+    .from("shipment_collections")
+    .select("shipment_id,amount,collected_at,shipments!inner(destination_branch_code)")
+    .eq("collection_type", "CASH_DESTINATION")
+    .eq("status", "COLLECTED")
+    .eq("is_active", true);
+  if (result.error) {
+    if (["42P01", "PGRST205"].includes(result.error.code || "")) return [];
+    throw result.error;
+  }
+  return (result.data || []).map((row) => {
+    const shipment = Array.isArray(row.shipments) ? row.shipments[0] : row.shipments;
+    return {
+      shipmentId: String(row.shipment_id || ""),
+      branchCode: String(shipment?.destination_branch_code || ""),
+      amount: Number(row.amount) || 0,
+      collectedAt: String(row.collected_at || ""),
+    };
+  });
 }
 export async function recordDelivery(input: import("./types").DeliveryInput) {
   const result = await supabase.rpc("record_branch_delivery", {
@@ -609,6 +690,10 @@ export async function recordDelivery(input: import("./types").DeliveryInput) {
       note: input.note,
       round_reference: input.roundReference,
       request_id: input.requestId,
+      items: (input.items || []).map((item) => ({
+        shipment_item_id: item.itemId,
+        quantity: item.quantity,
+      })),
     },
   });
   if (result.error) throw result.error;

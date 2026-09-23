@@ -277,7 +277,7 @@ export default function ShipmentTracking({
         "สถานะบิล",
         "วันที่ขึ้นรถ",
         "ทะเบียนรถ",
-        "เลขใบคลุมรถ",
+        "วันที่สาขารับรถ",
         "วันที่ส่งสำเร็จ",
       ],
       ...rows.flatMap((shipment) =>
@@ -296,7 +296,7 @@ export default function ShipmentTracking({
           STATUS_LABELS[shipment.shipment_status],
           shipment.loaded_at || "",
           shipment.vehicle_plate_no || "",
-          shipment.manifest_no || "",
+          shipment.branch_received_at || "",
           shipment.delivered_at || "",
         ]),
       ),
@@ -494,7 +494,7 @@ export default function ShipmentTracking({
                   <th>ผู้รับ / ผู้ส่ง</th>
                   <th>รายการสินค้า</th>
                   <th>ปลายทาง</th>
-                  <th>ขึ้นรถ / ใบคลุมรถ</th>
+                  <th>ทะเบียนรถ / วันที่ขึ้นรถ</th>
                   <th>การส่งมอบ</th>
                   <th className="numeric">ยอดบิล</th>
                   <th>สถานะ</th>
@@ -554,35 +554,31 @@ export default function ShipmentTracking({
                         <span className="muted">ยังไม่ขึ้นรถ</span>
                       ) : (
                         <>
-                          <strong>
-                            {shipment.loaded_at
+                          <strong>{shipment.vehicle_plate_no || "ไม่ระบุทะเบียน"}</strong>
+                          <small>
+                            ขึ้นรถ: {shipment.loaded_at
                               ? thaiDate(shipment.loaded_at)
-                              : "ขึ้นรถแล้ว"}
-                          </strong>
-                          <small>
-                            ทะเบียน:{" "}
-                            {shipment.vehicle_plate_no || "ยังไม่มีข้อมูล"}
-                          </small>
-                          <small>
-                            ใบคลุมรถ: {shipment.manifest_no || "ยังไม่มีข้อมูล"}
+                              : "ยังไม่มีวันที่"}
                           </small>
                         </>
                       )}
                     </td>
                     <td>
-                      {shipment.shipment_status === "DELIVERED" ? (
-                        <>
-                          <strong className="success-text">ส่งสำเร็จ</strong>
-                          <small>
-                            {shipment.delivered_at
-                              ? thaiDate(shipment.delivered_at)
-                              : "ยังไม่มีวันที่ส่ง"}
-                          </small>
-                        </>
-                      ) : shipment.shipment_status === "CANCELLED" ? (
+                      {shipment.shipment_status === "CANCELLED" ? (
                         <span className="danger-text">ยกเลิก</span>
                       ) : (
-                        <span className="muted">ยังไม่ส่งมอบ</span>
+                        <>
+                          <strong>
+                            สาขารับรถ: {shipment.branch_received_at
+                              ? thaiDate(shipment.branch_received_at)
+                              : "ยังไม่รับรถ"}
+                          </strong>
+                          <small className={shipment.delivered_at ? "success-text" : "muted"}>
+                            ส่งสินค้า: {shipment.delivered_at
+                              ? thaiDate(shipment.delivered_at)
+                              : "ยังไม่ส่ง"}
+                          </small>
+                        </>
                       )}
                     </td>
                     <td className="numeric">

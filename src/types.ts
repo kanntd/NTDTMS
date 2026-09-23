@@ -173,6 +173,7 @@ export interface Shipment {
   vehicle_plate_no?: string;
   driver_name?: string;
   delivered_at?: string;
+  branch_received_at?: string;
   items?: Item[];
 }
 export interface ShipmentDetail extends Shipment {
@@ -241,6 +242,13 @@ export interface DeliveryLineRecord {
   shipmentId: string;
   itemId: string;
   quantity: number;
+  deliveredAt?: string;
+}
+export interface CashCollectionRecord {
+  shipmentId: string;
+  branchCode: string;
+  amount: number;
+  collectedAt: string;
 }
 export interface DeliveryInput {
   shipmentId: string;
@@ -249,6 +257,7 @@ export interface DeliveryInput {
   note: string;
   roundReference: string;
   requestId: string;
+  items?: Array<{ itemId: string; quantity: number }>;
 }
 export interface LoadTripRecord {
   id: string;

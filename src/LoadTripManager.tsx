@@ -10,7 +10,7 @@ import {
   Truck,
 } from "lucide-react";
 import { useWorkspace } from "./context";
-import { money, number, thaiDate } from "./domain";
+import { localDate, money, number, thaiDate } from "./domain";
 import {
   currentDriver,
   type OperationsState,
@@ -57,6 +57,8 @@ export default function LoadTripManager({
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<LoadTripStatus | "">("");
   const [branch, setBranch] = useState("");
+  const [dateFrom, setDateFrom] = useState(localDate());
+  const [dateTo, setDateTo] = useState(localDate());
   const [selectedTrip, setSelectedTrip] = useState<LoadTripRecord | null>(null);
   const [editing, setEditing] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -113,8 +115,11 @@ export default function LoadTripManager({
     const query = search.trim().toLocaleLowerCase("th");
     return trips.filter((trip) => {
       const lines = activeLines(trip);
+      const tripDate = localDate(new Date(trip.loadedAt));
       if (status && trip.status !== status) return false;
       if (branch && trip.destinationBranchCode !== branch) return false;
+      if (dateFrom && tripDate < dateFrom) return false;
+      if (dateTo && tripDate > dateTo) return false;
       if (!query) return true;
       return [
         trip.manifestNo,
@@ -131,7 +136,7 @@ export default function LoadTripManager({
         .toLocaleLowerCase("th")
         .includes(query);
     });
-  }, [trips, search, status, branch]);
+  }, [trips, search, status, branch, dateFrom, dateTo]);
 
   function branchName(trip: LoadTripRecord) {
     return (
@@ -348,6 +353,24 @@ export default function LoadTripManager({
               </option>
             ))}
           </select>
+          <label className="trip-date-filter">
+            <span>ตั้งแต่วันที่</span>
+            <input
+              type="date"
+              value={dateFrom}
+              max={dateTo || undefined}
+              onChange={(event) => setDateFrom(event.target.value)}
+            />
+          </label>
+          <label className="trip-date-filter">
+            <span>ถึงวันที่</span>
+            <input
+              type="date"
+              value={dateTo}
+              min={dateFrom || undefined}
+              onChange={(event) => setDateTo(event.target.value)}
+            />
+          </label>
         </div>
 
         {loading && !trips.length ? (

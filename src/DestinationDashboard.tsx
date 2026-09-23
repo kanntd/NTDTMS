@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Banknote,
+  CalendarDays,
+  CheckCircle2,
   Clock3,
+  FileText,
   LoaderCircle,
   MapPin,
   PackageCheck,
@@ -16,7 +19,7 @@ import {
   type DestinationMetric,
 } from "./destinationDashboardModel";
 import { money, number, thaiDate, thaiTime } from "./domain";
-import type { DeliveryLineRecord, LoadTripRecord } from "./types";
+import type { CashCollectionRecord, DeliveryLineRecord, LoadTripRecord } from "./types";
 import { Button } from "./ui";
 
 function MetricValue({ metric }: { metric: DestinationMetric }) {
@@ -47,6 +50,7 @@ export default function DestinationDashboard() {
   );
   const [trips, setTrips] = useState<LoadTripRecord[]>([]);
   const [deliveredLines, setDeliveredLines] = useState<DeliveryLineRecord[]>([]);
+  const [collections, setCollections] = useState<CashCollectionRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [receivingId, setReceivingId] = useState("");
   const [error, setError] = useState("");
@@ -61,12 +65,14 @@ export default function DestinationDashboard() {
     setLoading(true);
     setError("");
     try {
-      const [nextTrips, nextDeliveredLines] = await Promise.all([
+      const [nextTrips, nextDeliveredLines, nextCollections] = await Promise.all([
         w.service.loadTrips(),
         w.service.deliveryLines(),
+        w.service.cashDestinationCollections(),
       ]);
       setTrips(nextTrips);
       setDeliveredLines(nextDeliveredLines);
+      setCollections(nextCollections);
     } catch (cause) {
       setError((cause as Error).message || "โหลดข้อมูลสาขาไม่สำเร็จ");
     } finally {
@@ -79,8 +85,8 @@ export default function DestinationDashboard() {
   }, [refresh, w.revision]);
 
   const summary = useMemo(
-    () => summarizeDestinationDashboard(trips, branchCode, basis, new Date(), deliveredLines),
-    [trips, branchCode, basis, deliveredLines],
+    () => summarizeDestinationDashboard(trips, branchCode, basis, new Date(), deliveredLines, collections),
+    [trips, branchCode, basis, deliveredLines, collections],
   );
   const branch = branches.find((row) => row.code === branchCode);
   async function receiveTrip(trip: LoadTripRecord) {
@@ -110,31 +116,22 @@ export default function DestinationDashboard() {
   return (
     <div className="destination-dashboard">
       <div className="page-heading destination-heading">
-        <div>
+        <div className="destination-title-block">
           <div className="breadcrumb">
             ปฏิบัติการสาขา <span>/</span> {branch?.name || "ปลายทาง"}
           </div>
-          <h1>
-            ภาพรวมสาขาปลายทาง <span className="heading-dot" />
-          </h1>
-          <p>ข้อมูล ณ {thaiDate(new Date())}</p>
+          <div className="destination-title-row">
+            <span className="destination-title-icon"><MapPin size={24} /></span>
+            <h1>ภาพรวมสาขาปลายทาง</h1>
+            {selectableBranches.length > 1 ? (
+              <select value={branchCode} onChange={(event) => setBranchCode(event.target.value)}>
+                {selectableBranches.map((row) => <option key={row.code} value={row.code}>{row.name}</option>)}
+              </select>
+            ) : <strong className="destination-branch-name">{branch?.name}</strong>}
+          </div>
         </div>
         <div className="destination-heading-actions">
-          {selectableBranches.length > 1 && (
-            <label>
-              <span>สาขา</span>
-              <select
-                value={branchCode}
-                onChange={(event) => setBranchCode(event.target.value)}
-              >
-                {selectableBranches.map((row) => (
-                  <option key={row.code} value={row.code}>
-                    {row.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          <span className="destination-today"><CalendarDays size={18} />วันที่ {thaiDate(new Date())}</span>
           <Button onClick={() => void refresh()} disabled={loading}>
             {loading ? (
               <LoaderCircle className="spin" size={17} />
@@ -149,27 +146,44 @@ export default function DestinationDashboard() {
       {error && <div className="alert error">{error}</div>}
 
       <div className="destination-kpis">
-        <article>
+        <article className="incoming">
           <Truck size={23} />
           <span>รถกำลังมา</span>
           <strong>{number(summary.incomingTrips.length)}</strong>
           <small>เที่ยว</small>
         </article>
-        <article>
+        <article className="waiting-bills">
+          <FileText size={23} />
+          <span>รับรถแล้ววันนี้</span>
+          <div className="destination-card-stats three">
+            <span><b>{number(summary.receivedTripsToday)}</b><small>คัน</small></span>
+            <span><b>{number(summary.receivedToday.billCount)}</b><small>บิล</small></span>
+            <span><b>{number(summary.receivedToday.quantity)}</b><small>ชิ้น</small></span>
+          </div>
+        </article>
+        <article className="waiting-items">
           <PackageCheck size={23} />
-          <span>บิลและสินค้ารอส่ง</span>
-          <MetricValue metric={summary.waiting} />
+          <span>สินค้าต้องจัดส่ง</span>
+          <div className="destination-card-stats">
+            <span><b>{number(summary.waiting.billCount)}</b><small>บิล</small></span>
+            <span><b>{number(summary.waiting.quantity)}</b><small>ชิ้น</small></span>
+          </div>
         </article>
-        <article>
-          <Clock3 size={23} />
-          <span>รับเข้าสาขาวันนี้</span>
-          <MetricValue metric={summary.receivedToday} />
+        <article className="delivered">
+          <CheckCircle2 size={23} />
+          <span>ส่งสำเร็จวันนี้</span>
+          <div className="destination-card-stats">
+            <span><b>{number(summary.deliveredToday.billCount)}</b><small>บิล</small></span>
+            <span><b>{number(summary.deliveredToday.quantity)}</b><small>ชิ้น</small></span>
+          </div>
         </article>
-        <article>
+        <article className="cash">
           <Banknote size={23} />
-          <span>เงินสดปลายทางรอเก็บ</span>
-          <strong>฿{money(summary.cashDestination.amount)}</strong>
-          <small>{number(summary.cashDestination.billCount)} บิล</small>
+          <span>เก็บเงินสดปลายทางวันนี้</span>
+          <div className="destination-card-stats">
+            <span><b>{number(summary.collectedToday.billCount)}</b><small>บิล</small></span>
+            <span><b>฿{money(summary.collectedToday.amount)}</b><small>ยอดเงิน</small></span>
+          </div>
         </article>
       </div>
 
@@ -244,6 +258,7 @@ export default function DestinationDashboard() {
         </footer>
       </section>
 
+      <div className="destination-lower-grid">
       <section className="destination-incoming">
         <header>
           <div>
@@ -274,6 +289,16 @@ export default function DestinationDashboard() {
           </div>
         )}
       </section>
+      <section className="destination-actions-panel">
+        <header>
+          <div><CheckCircle2 size={20} /><div><h2>งานที่ต้องจัดการ</h2><span>รายการสำคัญของสาขา{branch?.name}</span></div></div>
+        </header>
+        <div className="destination-action-list">
+          <div><Banknote size={19} /><span><b>เก็บเงินสดปลายทาง</b><small>บิลที่ส่งแล้วรอรับชำระ</small></span><strong className="destination-action-values"><b>{number(summary.cashDestination.billCount)} บิล</b><small>฿{money(summary.cashDestination.amount)}</small></strong></div>
+          <div><Clock3 size={19} /><span><b>บิลค้างส่ง</b><small>ค้างตั้งแต่ 4 วันขึ้นไป</small></span><strong className="destination-action-values"><b>{number(summary.overdue.billCount)} บิล</b><small>{number(summary.overdue.quantity)} ชิ้น</small></strong></div>
+        </div>
+      </section>
+      </div>
     </div>
   );
 }

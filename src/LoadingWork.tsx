@@ -47,6 +47,7 @@ import {
 
 type SortMode = "OLDEST" | "RECEIVER" | "SENDER" | "NEWEST" | "QUANTITY_DESC";
 type AgeFilter = "" | "0" | "1" | "2" | "3" | "MORE_THAN_3";
+type LoadProgressFilter = "" | "NOT_LOADED" | "PARTIAL";
 
 function branchCode(
   row: LoadingQueueRecord,
@@ -102,6 +103,7 @@ export default function LoadingWork({
   const [branch, setBranch] = useState(initialBranch);
   const [district, setDistrict] = useState("");
   const [age, setAge] = useState<AgeFilter>("");
+  const [loadProgress, setLoadProgress] = useState<LoadProgressFilter>("");
   const [payment, setPayment] = useState<PaymentMode | "">("");
   const [receiver, setReceiver] = useState("");
   const [sender, setSender] = useState("");
@@ -163,6 +165,7 @@ export default function LoadingWork({
     setBranch(initialBranch);
     setDistrict("");
     setPayment("");
+    setLoadProgress("");
     setSelected(new Set());
   }, [initialBranch]);
 
@@ -269,6 +272,15 @@ export default function LoadingWork({
       )
       .filter((row) => !unit || row.items.some((item) => item.unit === unit))
       .filter((row) => {
+        if (!loadProgress) return true;
+        const hasLoadedQuantity = row.items.some(
+          (item) => Number(item.loaded_quantity || 0) > 0,
+        );
+        return loadProgress === "PARTIAL"
+          ? hasLoadedQuantity
+          : !hasLoadedQuantity;
+      })
+      .filter((row) => {
         const billAge = calendarAgeInBangkok(row.received_at);
         if (!age) return true;
         if (age === "MORE_THAN_3") return billAge > 3;
@@ -311,6 +323,7 @@ export default function LoadingWork({
     sender,
     product,
     unit,
+    loadProgress,
     age,
     search,
     sort,
@@ -376,6 +389,7 @@ export default function LoadingWork({
     setSender("");
     setProduct("");
     setUnit("");
+    setLoadProgress("");
     setAge("");
     setSearch("");
     setSelected(new Set());
@@ -390,6 +404,7 @@ export default function LoadingWork({
     setSender("");
     setProduct("");
     setUnit("");
+    setLoadProgress("");
     setSearch("");
   }
 
@@ -883,6 +898,17 @@ export default function LoadingWork({
                 <option value="2">ค้าง 2 วัน</option>
                 <option value="3">ค้าง 3 วัน</option>
                 <option value="MORE_THAN_3">ค้างมากกว่า 3 วัน</option>
+              </select>
+              <select
+                aria-label="กรองสถานะการขึ้นรถ"
+                value={loadProgress}
+                onChange={(event) =>
+                  setLoadProgress(event.target.value as LoadProgressFilter)
+                }
+              >
+                <option value="">ทุกสถานะการขึ้นรถ</option>
+                <option value="NOT_LOADED">ยังไม่ขึ้นรถ</option>
+                <option value="PARTIAL">ขึ้นบางส่วน</option>
               </select>
               <select
                 aria-label="จัดกลุ่มรายการ"

@@ -1,5 +1,6 @@
 import { calendarAgeInBangkok } from "./dashboardQueue";
 import type {
+  CashCollectionRecord,
   DeliveryLineRecord,
   LoadTripAllocation,
   LoadTripRecord,
@@ -15,12 +16,15 @@ export interface DestinationMetric {
 export interface DestinationDashboardSummary {
   waiting: DestinationMetric;
   receivedToday: DestinationMetric;
+  receivedTripsToday: number;
   overdue: DestinationMetric;
   overdue4: DestinationMetric;
   overdue5: DestinationMetric;
   overdueMoreThan5: DestinationMetric;
   cashDestination: { billCount: number; amount: number };
   incomingTrips: LoadTripRecord[];
+  deliveredToday: DestinationMetric;
+  collectedToday: { billCount: number; amount: number };
 }
 
 const emptyMetric = (): DestinationMetric => ({ billCount: 0, quantity: 0 });
@@ -40,6 +44,7 @@ export function summarizeDestinationDashboard(
   basis: DestinationAgeBasis,
   today: string | Date = new Date(),
   deliveredLines: DeliveryLineRecord[] = [],
+  collections: CashCollectionRecord[] = [],
 ): DestinationDashboardSummary {
   const branchTrips = trips.filter(
     (trip) => trip.destinationBranchCode === branchCode,
@@ -48,6 +53,9 @@ export function summarizeDestinationDashboard(
   const received = branchTrips.filter(
     (trip) => trip.status === "RECEIVED" && trip.receivedAt,
   );
+  const receivedTripsToday = received.filter(
+    (trip) => trip.receivedAt && calendarAgeInBangkok(trip.receivedAt, today) === 0,
+  ).length;
   const deliveredByItem = new Map<string, number>();
   deliveredLines.forEach((line) =>
     deliveredByItem.set(
@@ -84,9 +92,13 @@ export function summarizeDestinationDashboard(
   const cashLines = lines.filter(
     ({ line }) => line.paymentMode === "CASH_DESTINATION",
   );
+  const todayCollections = collections.filter(
+    (row) => row.branchCode === branchCode && age(row.collectedAt) === 0,
+  );
 
   return {
     waiting: summarizeLines(lines),
+    receivedTripsToday,
     receivedToday: summarizeLines(
       lines
         .filter(({ receivedAt }) => age(receivedAt) === 0)
@@ -101,5 +113,19 @@ export function summarizeDestinationDashboard(
       amount: cashLines.reduce((sum, { line }) => sum + (line.amount || 0), 0),
     },
     incomingTrips,
+    deliveredToday: {
+      billCount: new Set(
+        deliveredLines
+          .filter((line) => line.deliveredAt && age(line.deliveredAt) === 0)
+          .map((line) => line.shipmentId),
+      ).size,
+      quantity: deliveredLines
+        .filter((line) => line.deliveredAt && age(line.deliveredAt) === 0)
+        .reduce((sum, line) => sum + line.quantity, 0),
+    },
+    collectedToday: {
+      billCount: new Set(todayCollections.map((row) => row.shipmentId)).size,
+      amount: todayCollections.reduce((sum, row) => sum + row.amount, 0),
+    },
   };
 }

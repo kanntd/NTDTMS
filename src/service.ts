@@ -674,6 +674,10 @@ export function createService(demo: boolean) {
         return [];
       }
     },
+    cashDestinationCollections: async () => {
+      if (!demo) return api.getCashDestinationCollections();
+      return [] as import("./types").CashCollectionRecord[];
+    },
     recordDelivery: async (input: DeliveryInput) => {
       if (!demo) return api.recordDelivery(input);
       const trips = await createService(true).loadTrips();
@@ -689,10 +693,26 @@ export function createService(demo: boolean) {
       existing.forEach((line) =>
         delivered.set(line.itemId, (delivered.get(line.itemId) || 0) + line.quantity),
       );
+      const requested = new Map(
+        (input.items || []).map((item) => [item.itemId, item.quantity]),
+      );
       const next = available.flatMap((line) => {
-        const quantity = Math.max(0, line.quantity - (delivered.get(line.itemId) || 0));
+        const remaining = Math.max(
+          0,
+          line.quantity - (delivered.get(line.itemId) || 0),
+        );
+        const quantity = requested.size
+          ? Number(requested.get(line.itemId) || 0)
+          : remaining;
+        if (!Number.isFinite(quantity) || quantity < 0 || quantity > remaining)
+          throw new Error(`จำนวนส่ง ${line.description} ไม่ถูกต้อง`);
         return quantity > 0
-          ? [{ shipmentId: line.shipmentId, itemId: line.itemId, quantity }]
+          ? [{
+              shipmentId: line.shipmentId,
+              itemId: line.itemId,
+              quantity,
+              deliveredAt: new Date().toISOString(),
+            }]
           : [];
       });
       if (!next.length) throw new Error("บิลนี้ไม่มีสินค้าคงเหลือให้บันทึกส่ง");

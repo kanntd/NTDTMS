@@ -1,86 +1,54 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  ArrowUpDown,
-  Banknote,
-  CheckCircle2,
-  ClipboardCheck,
-  PackageCheck,
-  RefreshCw,
-  RotateCcw,
-  ScanLine,
-  Search,
-  Truck,
-  X,
-} from "lucide-react";
+import { ArrowUpDown, CheckCircle2, Eye, PackageCheck, RefreshCw, ScanLine, Search, Truck, X } from "lucide-react";
 import { billNumberPrefix } from "./billNumber";
-import { completeBillNumber } from "./loadingQueue";
-import { useWorkspace } from "./context";
 import { destinationBranches } from "./branchRoutes";
+import { useWorkspace } from "./context";
 import { calendarAgeInBangkok } from "./dashboardQueue";
-import { money, number, thaiDate } from "./domain";
-import { Button, Field, Loading } from "./ui";
-import {
-  PAYMENT_LABELS,
-  type DeliveryInput,
-  type LoadTripAllocation,
-} from "./types";
+import { number, thaiDate } from "./domain";
+import { completeBillNumber, LOADING_PAYMENT_MODES } from "./loadingQueue";
+import { Button, Empty, Loading, Modal } from "./ui";
+import { PAYMENT_LABELS, type LoadTripAllocation, type PaymentMode, type Shipment } from "./types";
 
-type QueueBill = {
-  id: string;
-  shipmentNo: string;
-  receiverName: string;
-  senderName: string;
-  paymentMode: NonNullable<LoadTripAllocation["paymentMode"]>;
-  expectedAmount: number;
-  openedAt: string;
-  items: Array<{
-    id: string;
-    description: string;
-    unit: string;
-    quantity: number;
-  }>;
+type Item = { id: string; description: string; unit: string; arrived: number; delivered: number; remaining: number };
+type Bill = {
+  id: string; shipmentNo: string; openedAt: string; receivedAt: string;
+  receiverId: string; receiverName: string; receiverPhone: string;
+  senderId: string; senderName: string; senderPhone: string;
+  district: string; paymentMode: NonNullable<LoadTripAllocation["paymentMode"]>;
+  items: Item[]; partial: boolean;
 };
+type Sort = "OLDEST" | "NEWEST" | "RECEIVER" | "SENDER" | "QUANTITY";
+type Age = "" | "0" | "1" | "2" | "3" | "MORE";
+type Progress = "" | "NONE" | "PARTIAL";
 
-const RESULTS: Array<[DeliveryInput["result"], string]> = [
-  ["DELIVERED", "ส่งสำเร็จ"],
-  ["CUSTOMER_ABSENT", "ไม่พบผู้รับ"],
-  ["REFUSED", "ลูกค้าปฏิเสธรับ"],
-  ["DAMAGED", "สินค้าชำรุด"],
-  ["RESCHEDULED", "นัดส่งใหม่"],
-  ["OTHER", "เหตุผลอื่น"],
-];
+const normalize = (value: string) => value.toLocaleLowerCase("th").replace(/[\s.-]/g, "");
+const unique = (values: string[]) => [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "th"));
+const quantity = (bill: Bill) => bill.items.reduce((sum, item) => sum + item.remaining, 0);
 
 export default function DeliveryWork() {
   const w = useWorkspace();
-  const branches = useMemo(
-    () => destinationBranches(w.branches, w.zones),
-    [w.branches, w.zones],
-  );
-  const profileBranch = w.branches.find(
-    (row) => row.id === w.profile.branch_id,
-  );
-  const manager = ["owner", "admin"].includes(w.profile.role);
-  const availableBranches = manager
-    ? branches
-    : branches.filter((row) => row.code === profileBranch?.code);
-  const [branchCode, setBranchCode] = useState(
-    manager ? "" : availableBranches[0]?.code || "",
-  );
-  const [bills, setBills] = useState<QueueBill[]>([]);
+  const manager = w.profile.role === "owner" || w.profile.role === "admin";
+  const profileBranch = w.branches.find((row) => row.id === w.profile.branch_id);
+  const allBranches = useMemo(() => destinationBranches(w.branches, w.zones), [w.branches, w.zones]);
+  const branches = manager ? allBranches : allBranches.filter((row) => row.code === profileBranch?.code);
+  const [branch, setBranch] = useState(branches[0]?.code || "");
+  const [bills, setBills] = useState<Bill[]>([]);
   const [entry, setEntry] = useState("");
   const [search, setSearch] = useState("");
   const [receiver, setReceiver] = useState("");
   const [sender, setSender] = useState("");
   const [product, setProduct] = useState("");
   const [unit, setUnit] = useState("");
-  const [payment, setPayment] = useState("");
-  const [age, setAge] = useState("");
-  const [sort, setSort] = useState("OLDEST");
-  const [selected, setSelected] = useState<QueueBill | null>(null);
-  const [result, setResult] = useState<DeliveryInput["result"]>("DELIVERED");
-  const [collected, setCollected] = useState("");
-  const [roundReference, setRoundReference] = useState("");
-  const [note, setNote] = useState("");
+  const [district, setDistrict] = useState("");
+  const [payment, setPayment] = useState<PaymentMode | "">("");
+  const [age, setAge] = useState<Age>("");
+  const [ageBasis, setAgeBasis] = useState<"OPENED" | "RECEIVED">("RECEIVED");
+  const [progress, setProgress] = useState<Progress>("");
+  const [group, setGroup] = useState<"NONE" | "RECEIVER" | "SENDER">("NONE");
+  const [sort, setSort] = useState<Sort>("OLDEST");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [amounts, setAmounts] = useState<Record<string, string>>({});
+  const [reviewing, setReviewing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -88,568 +56,152 @@ export default function DeliveryWork() {
   const prefix = billNumberPrefix(issuingBranch?.document_code || "B01");
 
   async function refresh() {
+    if (!branch) return;
     setLoading(true);
     try {
-      const [trips, deliveredLines] = await Promise.all([
-        w.service.loadTrips(),
-        w.service.deliveryLines(),
+      const [trips, deliveryLines, shipmentPage] = await Promise.all([
+        w.service.loadTrips(), w.service.deliveryLines(),
+        w.service.shipments({ branch, pageSize: 500 }),
       ]);
+      const shipmentMap = new Map(shipmentPage.rows.map((row) => [row.id, row]));
       const delivered = new Map<string, number>();
-      deliveredLines.forEach((line) =>
-        delivered.set(
-          line.itemId,
-          (delivered.get(line.itemId) || 0) + line.quantity,
-        ),
-      );
-      const grouped = new Map<string, QueueBill>();
-      trips
-        .filter(
-          (trip) =>
-            trip.status === "RECEIVED" &&
-            (!branchCode || trip.destinationBranchCode === branchCode),
-        )
-        .flatMap((trip) => trip.allocations)
-        .filter(
-          (line) =>
-            line.active &&
-            line.shipmentStatus !== "DELIVERED" &&
-            line.shipmentStatus !== "CANCELLED",
-        )
-        .forEach((line) => {
-          const remaining = Math.max(
-            0,
-            line.quantity - (delivered.get(line.itemId) || 0),
-          );
-          if (remaining <= 0) return;
-          const bill = grouped.get(line.shipmentId) || {
-            id: line.shipmentId,
-            shipmentNo: line.shipmentNo,
-            receiverName: line.receiverName,
-            senderName: line.senderName,
-            paymentMode: line.paymentMode || "CASH_ORIGIN",
-            expectedAmount: 0,
-            openedAt: line.openedAt || "",
-            items: [],
-          };
-          const existing = bill.items.find((item) => item.id === line.itemId);
-          if (existing) existing.quantity += remaining;
-          else
-            bill.items.push({
-              id: line.itemId,
-              description: line.description,
-              unit: line.unit,
-              quantity: remaining,
-            });
-          bill.expectedAmount +=
-            (line.amount || 0) * (remaining / line.quantity);
+      deliveryLines.forEach((line) => delivered.set(line.itemId, (delivered.get(line.itemId) || 0) + line.quantity));
+      const grouped = new Map<string, Bill>();
+      trips.filter((trip) => trip.status === "RECEIVED" && trip.destinationBranchCode === branch)
+        .flatMap((trip) => trip.allocations.map((line) => ({ line, receivedAt: trip.receivedAt || trip.loadedAt })))
+        .filter(({ line }) => line.active && !["DELIVERED", "CANCELLED"].includes(line.shipmentStatus || ""))
+        .forEach(({ line, receivedAt }) => {
+          const shipment = shipmentMap.get(line.shipmentId);
+          const bill = grouped.get(line.shipmentId) || createBill(line, shipment, receivedAt);
+          const item = bill.items.find((row) => row.id === line.itemId);
+          if (item) item.arrived += line.quantity;
+          else bill.items.push({ id: line.itemId, description: line.description, unit: line.unit, arrived: line.quantity, delivered: delivered.get(line.itemId) || 0, remaining: 0 });
+          if (+new Date(receivedAt) < +new Date(bill.receivedAt)) bill.receivedAt = receivedAt;
           grouped.set(line.shipmentId, bill);
         });
-      setBills(
-        [...grouped.values()].sort((a, b) =>
-          a.receiverName.localeCompare(b.receiverName, "th"),
-        ),
-      );
+      const next = [...grouped.values()].flatMap((bill) => {
+        bill.items = bill.items.map((item) => ({ ...item, remaining: Math.max(0, item.arrived - item.delivered) })).filter((item) => item.remaining > 0);
+        bill.partial = bill.items.some((item) => item.delivered > 0);
+        return bill.items.length ? [bill] : [];
+      });
+      setBills(next);
+      setSelected((current) => new Set([...current].filter((id) => next.some((bill) => bill.id === id))));
     } catch (cause) {
       w.toast((cause as Error).message || "โหลดงานส่งสินค้าไม่สำเร็จ", true);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
+  }
+
+  function createBill(line: LoadTripAllocation, shipment: Shipment | undefined, receivedAt: string): Bill {
+    return {
+      id: line.shipmentId, shipmentNo: line.shipmentNo,
+      openedAt: line.openedAt || shipment?.received_at || receivedAt, receivedAt,
+      receiverId: shipment?.receiver_snapshot.id || line.receiverName,
+      receiverName: line.receiverName, receiverPhone: shipment?.receiver_snapshot.phone || "",
+      senderId: shipment?.sender_snapshot.id || line.senderName,
+      senderName: line.senderName, senderPhone: shipment?.sender_snapshot.phone || "",
+      district: shipment?.district_name || "เมือง", paymentMode: line.paymentMode || "CASH_ORIGIN",
+      items: [], partial: false,
+    };
   }
 
   useEffect(() => {
-    if (manager && !branchCode) return;
-    if (!availableBranches.some((branch) => branch.code === branchCode))
-      setBranchCode(availableBranches[0]?.code || "");
-  }, [availableBranches, branchCode, manager]);
-  useEffect(() => {
-    if (manager || branchCode) void refresh();
-  }, [branchCode, w.revision]);
+    if (!branches.some((row) => row.code === branch)) setBranch(branches[0]?.code || "");
+  }, [branches, branch]);
+  useEffect(() => { setSelected(new Set()); setAmounts({}); if (branch) void refresh(); }, [branch, w.revision]);
 
-  const filterOptions = useMemo(
-    () => ({
-      receivers: [...new Set(bills.map((bill) => bill.receiverName))].sort(
-        (a, b) => a.localeCompare(b, "th"),
-      ),
-      senders: [...new Set(bills.map((bill) => bill.senderName))].sort((a, b) =>
-        a.localeCompare(b, "th"),
-      ),
-      products: [
-        ...new Set(
-          bills.flatMap((bill) => bill.items.map((item) => item.description)),
-        ),
-      ].sort((a, b) => a.localeCompare(b, "th")),
-      units: [
-        ...new Set(
-          bills.flatMap((bill) => bill.items.map((item) => item.unit)),
-        ),
-      ].sort((a, b) => a.localeCompare(b, "th")),
-    }),
-    [bills],
-  );
-  const visibleBills = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase("th");
-    return bills
-      .filter(
-        (bill) =>
-          (!query ||
-            [
-              bill.shipmentNo,
-              bill.receiverName,
-              bill.senderName,
-              ...bill.items.flatMap((item) => [item.description, item.unit]),
-            ]
-              .join(" ")
-              .toLocaleLowerCase("th")
-              .includes(query)) &&
-          (!receiver || bill.receiverName === receiver) &&
-          (!sender || bill.senderName === sender) &&
-          (!product ||
-            bill.items.some((item) => item.description === product)) &&
-          (!unit || bill.items.some((item) => item.unit === unit)) &&
-          (!payment || bill.paymentMode === payment) &&
-          (!age ||
-            (age === "MORE_THAN_3"
-              ? calendarAgeInBangkok(bill.openedAt) > 3
-              : calendarAgeInBangkok(bill.openedAt) === Number(age))),
-      )
+  const receivers = useMemo(() => [...new Map(bills.map((bill) => [bill.receiverId, bill.receiverName]))].sort((a, b) => a[1].localeCompare(b[1], "th")), [bills]);
+  const senders = useMemo(() => [...new Map(bills.map((bill) => [bill.senderId, bill.senderName]))].sort((a, b) => a[1].localeCompare(b[1], "th")), [bills]);
+  const products = useMemo(() => unique(bills.flatMap((bill) => bill.items.map((item) => item.description))), [bills]);
+  const units = useMemo(() => unique(bills.flatMap((bill) => bill.items.map((item) => item.unit))), [bills]);
+  const districts = useMemo(() => unique(bills.map((bill) => bill.district)), [bills]);
+  const visible = useMemo(() => {
+    const query = normalize(search);
+    return bills.filter((bill) => !receiver || bill.receiverId === receiver)
+      .filter((bill) => !sender || bill.senderId === sender)
+      .filter((bill) => !product || bill.items.some((item) => item.description === product))
+      .filter((bill) => !unit || bill.items.some((item) => item.unit === unit))
+      .filter((bill) => !district || bill.district === district)
+      .filter((bill) => !payment || bill.paymentMode === payment)
+      .filter((bill) => !progress || (progress === "PARTIAL" ? bill.partial : !bill.partial))
+      .filter((bill) => {
+        if (!age) return true;
+        const days = calendarAgeInBangkok(ageBasis === "OPENED" ? bill.openedAt : bill.receivedAt);
+        return age === "MORE" ? days > 3 : days === Number(age);
+      })
+      .filter((bill) => !query || normalize([bill.shipmentNo, bill.receiverName, bill.receiverPhone, bill.senderName, bill.senderPhone, ...bill.items.flatMap((item) => [item.description, item.unit])].join(" ")).includes(query))
       .sort((a, b) => {
-        if (sort === "NEWEST")
-          return +new Date(b.openedAt) - +new Date(a.openedAt);
-        if (sort === "RECEIVER")
-          return a.receiverName.localeCompare(b.receiverName, "th");
-        if (sort === "QUANTITY")
-          return (
-            b.items.reduce((sum, item) => sum + item.quantity, 0) -
-            a.items.reduce((sum, item) => sum + item.quantity, 0)
-          );
-        return +new Date(a.openedAt) - +new Date(b.openedAt);
+        if (group === "RECEIVER" || sort === "RECEIVER") return a.receiverName.localeCompare(b.receiverName, "th");
+        if (group === "SENDER" || sort === "SENDER") return a.senderName.localeCompare(b.senderName, "th");
+        if (sort === "QUANTITY") return quantity(b) - quantity(a);
+        const difference = +new Date(a.receivedAt) - +new Date(b.receivedAt);
+        return sort === "NEWEST" ? -difference : difference;
       });
-  }, [age, bills, payment, product, receiver, search, sender, sort, unit]);
+  }, [bills, receiver, sender, product, unit, district, payment, progress, age, ageBasis, search, sort, group]);
+  const selectedBills = bills.filter((bill) => selected.has(bill.id));
 
-  function selectBill(bill: QueueBill) {
-    setSelected(bill);
-    setResult("DELIVERED");
-    setCollected(
-      bill.paymentMode === "CASH_DESTINATION"
-        ? bill.expectedAmount.toFixed(2)
-        : "",
-    );
-    setNote("");
-    setEntry("");
+  function selectBill(bill: Bill, checked: boolean) {
+    setSelected((current) => { const next = new Set(current); checked ? next.add(bill.id) : next.delete(bill.id); return next; });
+    if (checked) setAmounts((current) => ({ ...current, ...Object.fromEntries(bill.items.filter((item) => current[item.id] === undefined).map((item) => [item.id, String(item.remaining)])) }));
   }
-
-  function findBill() {
+  function addBill() {
     const shipmentNo = completeBillNumber(prefix, entry);
     const bill = bills.find((row) => row.shipmentNo === shipmentNo);
-    if (!bill) {
-      w.toast(`ไม่พบบิล ${shipmentNo || entry} ในรายการรอส่งของสาขานี้`, true);
-      return;
-    }
-    selectBill(bill);
+    if (!bill) w.toast(`ไม่พบบิล ${shipmentNo || entry} ในรายการรอส่งของสาขานี้`, true);
+    else if (selected.has(bill.id)) w.toast(`เลือกบิล ${bill.shipmentNo} ไว้แล้ว`);
+    else { selectBill(bill, true); w.toast(`เลือกบิล ${bill.shipmentNo} แล้ว`); }
+    setEntry(""); inputRef.current?.focus();
   }
-
-  function clearForm() {
-    setSelected(null);
-    setResult("DELIVERED");
-    setCollected("");
-    setNote("");
-    inputRef.current?.focus();
+  function clearFilters() {
+    setSearch(""); setReceiver(""); setSender(""); setProduct(""); setUnit("");
+    setDistrict(""); setPayment(""); setAge(""); setProgress("");
   }
-
   async function save() {
-    if (!selected) return;
-    const amount = Number(collected || 0);
-    if (!Number.isFinite(amount) || amount < 0) {
-      w.toast("ยอดเงินที่เก็บได้ไม่ถูกต้อง", true);
-      return;
-    }
+    const invalid = selectedBills.some((bill) => bill.items.some((item) => {
+      const value = Number(amounts[item.id] || 0);
+      return !Number.isFinite(value) || value < 0 || value > item.remaining;
+    }));
+    if (invalid) return w.toast("กรุณาตรวจสอบจำนวนสินค้าที่ส่ง", true);
     setBusy(true);
     try {
-      await w.service.recordDelivery({
-        shipmentId: selected.id,
-        result,
-        collectedAmount: result === "DELIVERED" ? amount : 0,
-        note,
-        roundReference,
-        requestId: crypto.randomUUID(),
-      });
-      w.toast(
-        result === "DELIVERED"
-          ? `บันทึกส่งบิล ${selected.shipmentNo} แล้ว`
-          : `บันทึกผลการนำส่งบิล ${selected.shipmentNo} แล้ว`,
-      );
-      clearForm();
-      await refresh();
-      w.refresh();
-    } catch (cause) {
-      w.toast((cause as Error).message || "บันทึกผลส่งสินค้าไม่สำเร็จ", true);
-    } finally {
-      setBusy(false);
-    }
+      for (const bill of selectedBills) {
+        const items = bill.items.flatMap((item) => {
+          const value = Number(amounts[item.id] || 0);
+          return value > 0 ? [{ itemId: item.id, quantity: value }] : [];
+        });
+        if (items.length) await w.service.recordDelivery({ shipmentId: bill.id, result: "DELIVERED", collectedAmount: 0, note: "", roundReference: "", requestId: crypto.randomUUID(), items });
+      }
+      w.toast(`บันทึกส่งสินค้า ${selectedBills.length} บิลแล้ว`);
+      setReviewing(false); setSelected(new Set()); setAmounts({}); await refresh(); w.refresh();
+    } catch (cause) { w.toast((cause as Error).message || "บันทึกผลส่งสินค้าไม่สำเร็จ", true); }
+    finally { setBusy(false); }
   }
 
-  if (!availableBranches.length)
-    return (
-      <div className="empty-state">
-        <Truck size={30} />
-        <h2>บัญชีนี้ยังไม่ได้ผูกกับสาขาปลายทาง</h2>
+  if (!branches.length) return <Empty title="บัญชีนี้ยังไม่ได้ผูกกับสาขาปลายทาง กรุณาให้ผู้ดูแลกำหนดสาขาก่อน" />;
+  return <div className="delivery-work">
+    <div className="page-heading"><div><div className="breadcrumb">ปฏิบัติการสาขา <span>/</span> งานส่งสินค้า</div><h1>บิลรอส่งสินค้า <span className="heading-dot" /></h1><p>พิมพ์หรือสแกนเลขบิลเพื่อเลือก แล้วตรวจรายการก่อนบันทึก</p></div><Button onClick={() => void refresh()} disabled={loading}><RefreshCw className={loading ? "spin" : ""} size={17} />อัปเดตข้อมูล</Button></div>
+    <div className="delivery-summary"><article><Truck size={22} /><span>บิลรอส่ง</span><strong>{number(bills.length)}</strong><small>บิล</small></article><article><PackageCheck size={22} /><span>สินค้ารอส่ง</span><strong>{number(bills.reduce((sum, bill) => sum + quantity(bill), 0))}</strong><small>หน่วย</small></article></div>
+    <section className="delivery-entry-panel"><header><ScanLine size={22} /><div><h2>พิมพ์หรือสแกนเลขบิล</h2><p>กด Enter แล้วระบบจะติ๊กเลือกบิลให้อัตโนมัติ</p></div></header><form onSubmit={(event) => { event.preventDefault(); addBill(); }}><span>{prefix}</span><input ref={inputRef} autoFocus aria-label="เลขบิลส่งสินค้า" placeholder="123 หรือสแกน QR" value={entry} onChange={(event) => setEntry(event.target.value)} /><Button className="primary" type="submit" disabled={!entry.trim()}>เพิ่มบิล</Button></form></section>
+    <section className="delivery-queue-panel">
+      <div className="loading-toolbar delivery-toolbar">
+        <div className="input-icon loading-search"><Search size={17} /><input aria-label="ค้นหาบิลรอส่ง" placeholder="ค้นหาเลขบิล ผู้รับ ผู้ส่ง เบอร์โทร หรือสินค้า" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
+        <select aria-label="สาขาปลายทาง" value={branch} disabled={!manager} onChange={(event) => setBranch(event.target.value)}>{branches.map((row) => <option key={row.code} value={row.code}>{row.name}</option>)}</select>
+        <select aria-label="กรองผู้รับ" value={receiver} onChange={(event) => setReceiver(event.target.value)}><option value="">ผู้รับทั้งหมด</option>{receivers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select>
+        <select aria-label="กรองผู้ส่ง" value={sender} onChange={(event) => setSender(event.target.value)}><option value="">ผู้ส่งทั้งหมด</option>{senders.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select>
+        <select aria-label="กรองสินค้า" value={product} onChange={(event) => setProduct(event.target.value)}><option value="">สินค้าทั้งหมด</option>{products.map((name) => <option key={name}>{name}</option>)}</select>
+        <select aria-label="กรองหน่วยนับ" value={unit} onChange={(event) => setUnit(event.target.value)}><option value="">ทุกหน่วยนับ</option>{units.map((name) => <option key={name}>{name}</option>)}</select>
+        <select aria-label="กรองอำเภอ" value={district} onChange={(event) => setDistrict(event.target.value)}><option value="">ทุกอำเภอ</option>{districts.map((name) => <option key={name}>{name}</option>)}</select>
+        <select aria-label="กรองประเภทการชำระเงิน" value={payment} onChange={(event) => setPayment(event.target.value as PaymentMode | "")}><option value="">ทุกประเภทการชำระเงิน</option>{LOADING_PAYMENT_MODES.map((mode) => <option key={mode} value={mode}>{PAYMENT_LABELS[mode]}</option>)}</select>
+        <select aria-label="ฐานการนับอายุบิล" value={ageBasis} onChange={(event) => setAgeBasis(event.target.value as "OPENED" | "RECEIVED")}><option value="RECEIVED">อายุจากวันที่รับรถ</option><option value="OPENED">อายุจากวันที่เปิดบิล</option></select>
+        <select aria-label="กรองอายุบิล" value={age} onChange={(event) => setAge(event.target.value as Age)}><option value="">ทุกอายุบิล</option><option value="0">วันนี้</option><option value="1">ค้าง 1 วัน</option><option value="2">ค้าง 2 วัน</option><option value="3">ค้าง 3 วัน</option><option value="MORE">ค้างมากกว่า 3 วัน</option></select>
+        <select aria-label="กรองสถานะการส่ง" value={progress} onChange={(event) => setProgress(event.target.value as Progress)}><option value="">ทุกสถานะการส่ง</option><option value="NONE">ยังไม่ส่ง</option><option value="PARTIAL">ส่งบางส่วน</option></select>
+        <select aria-label="จัดกลุ่มรายการ" value={group} onChange={(event) => setGroup(event.target.value as typeof group)}><option value="NONE">แสดงรายบิล</option><option value="RECEIVER">รวมตามผู้รับ ก-ฮ</option><option value="SENDER">รวมตามผู้ส่ง ก-ฮ</option></select>
+        <label className="loading-sort"><ArrowUpDown size={16} /><select aria-label="เรียงรายการ" value={sort} onChange={(event) => setSort(event.target.value as Sort)}><option value="OLDEST">เก่าสุดก่อน</option><option value="NEWEST">ใหม่สุดก่อน</option><option value="RECEIVER">ผู้รับ ก-ฮ</option><option value="SENDER">ผู้ส่ง ก-ฮ</option><option value="QUANTITY">จำนวนมากก่อน</option></select></label>
+        <Button className="loading-clear" onClick={clearFilters}><X size={16} />ล้างตัวกรอง</Button>
       </div>
-    );
-
-  return (
-    <div className="delivery-work">
-      <div className="page-heading">
-        <div>
-          <div className="breadcrumb">
-            ปฏิบัติการสาขา <span>/</span> งานส่งสินค้า
-          </div>
-          <h1>
-            บันทึกผลส่งสินค้า <span className="heading-dot" />
-          </h1>
-          <p>คีย์เลขบิลแล้วบันทึกผลได้ทันที โดยไม่ต้องสร้างรอบส่ง</p>
-        </div>
-        <div className="heading-actions">
-          <Button onClick={() => void refresh()} disabled={loading}>
-            <RefreshCw size={17} />
-            อัปเดตข้อมูล
-          </Button>
-        </div>
-      </div>
-
-      <div className="delivery-summary">
-        <article>
-          <ClipboardCheck size={22} />
-          <span>บิลรอส่ง</span>
-          <strong>{number(bills.length)}</strong>
-          <small>บิล</small>
-        </article>
-        <article>
-          <PackageCheck size={22} />
-          <span>สินค้ารอส่ง</span>
-          <strong>
-            {number(
-              bills
-                .flatMap((bill) => bill.items)
-                .reduce((sum, item) => sum + item.quantity, 0),
-            )}
-          </strong>
-          <small>ชิ้น</small>
-        </article>
-        <article>
-          <Banknote size={22} />
-          <span>เงินสดปลายทาง</span>
-          <strong>
-            ฿
-            {money(
-              bills
-                .filter((bill) => bill.paymentMode === "CASH_DESTINATION")
-                .reduce((sum, bill) => sum + bill.expectedAmount, 0),
-            )}
-          </strong>
-          <small>
-            {number(
-              bills.filter((bill) => bill.paymentMode === "CASH_DESTINATION")
-                .length,
-            )}{" "}
-            บิล
-          </small>
-        </article>
-      </div>
-
-      <section className="delivery-entry-panel">
-        <header>
-          <ScanLine size={22} />
-          <div>
-            <h2>พิมพ์หรือสแกนเลขบิล</h2>
-            <p>พิมพ์เฉพาะเลขท้ายได้ ระบบเติมเลขด้านหน้าให้อัตโนมัติ</p>
-          </div>
-        </header>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            findBill();
-          }}
-        >
-          <span>{prefix}</span>
-          <input
-            ref={inputRef}
-            autoFocus
-            aria-label="เลขบิลส่งสินค้า"
-            placeholder="123 หรือสแกน QR"
-            value={entry}
-            onChange={(event) => setEntry(event.target.value)}
-          />
-          <Button className="primary" type="submit" disabled={!entry.trim()}>
-            ค้นหาบิล
-          </Button>
-        </form>
-      </section>
-
-      <section className="loading-toolbar delivery-filters">
-        <div className="input-icon loading-search">
-          <Search size={17} />
-          <input
-            aria-label="ค้นหาบิลรอส่ง"
-            placeholder="ค้นหาเลขบิล ผู้รับ ผู้ส่ง หรือสินค้า"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </div>
-        <select
-          aria-label="กรองสาขาปลายทางของงานส่งสินค้า"
-          value={branchCode}
-          disabled={!manager}
-          onChange={(event) => setBranchCode(event.target.value)}
-        >
-          {manager && <option value="">ทุกสาขา</option>}
-          {availableBranches.map((branch) => (
-            <option key={branch.code} value={branch.code}>
-              {branch.name}
-            </option>
-          ))}
-        </select>
-        <select
-          value={receiver}
-          onChange={(event) => setReceiver(event.target.value)}
-        >
-          <option value="">ผู้รับทั้งหมด</option>
-          {filterOptions.receivers.map((value) => (
-            <option key={value}>{value}</option>
-          ))}
-        </select>
-        <select
-          value={sender}
-          onChange={(event) => setSender(event.target.value)}
-        >
-          <option value="">ผู้ส่งทั้งหมด</option>
-          {filterOptions.senders.map((value) => (
-            <option key={value}>{value}</option>
-          ))}
-        </select>
-        <select
-          value={product}
-          onChange={(event) => setProduct(event.target.value)}
-        >
-          <option value="">สินค้าทั้งหมด</option>
-          {filterOptions.products.map((value) => (
-            <option key={value}>{value}</option>
-          ))}
-        </select>
-        <select value={unit} onChange={(event) => setUnit(event.target.value)}>
-          <option value="">หน่วยทั้งหมด</option>
-          {filterOptions.units.map((value) => (
-            <option key={value}>{value}</option>
-          ))}
-        </select>
-        <select
-          value={payment}
-          onChange={(event) => setPayment(event.target.value)}
-        >
-          <option value="">การชำระทั้งหมด</option>
-          {Object.entries(PAYMENT_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select value={age} onChange={(event) => setAge(event.target.value)}>
-          <option value="">ทุกอายุบิล</option>
-          <option value="0">วันนี้</option>
-          <option value="1">ค้าง 1 วัน</option>
-          <option value="2">ค้าง 2 วัน</option>
-          <option value="3">ค้าง 3 วัน</option>
-          <option value="MORE_THAN_3">ค้างมากกว่า 3 วัน</option>
-        </select>
-        <label className="loading-sort">
-          <ArrowUpDown size={16} />
-          <select
-            aria-label="เรียงรายการบิลรอส่ง"
-            value={sort}
-            onChange={(event) => setSort(event.target.value)}
-          >
-            <option value="OLDEST">เก่าสุดก่อน</option>
-            <option value="NEWEST">ใหม่สุดก่อน</option>
-            <option value="RECEIVER">ผู้รับ ก-ฮ</option>
-            <option value="QUANTITY">จำนวนมากก่อน</option>
-          </select>
-        </label>
-        <Button
-          className="loading-clear"
-          title="ล้างตัวกรอง"
-          onClick={() => {
-            setSearch("");
-            setReceiver("");
-            setSender("");
-            setProduct("");
-            setUnit("");
-            setPayment("");
-            setAge("");
-            setSort("OLDEST");
-          }}
-        >
-          <X size={16} /> ล้าง
-        </Button>
-      </section>
-
-      <div className="loading-result-summary delivery-result-summary">
-        <span>พบ {number(visibleBills.length)} บิล</span>
-        <span>
-          {number(
-            visibleBills
-              .flatMap((bill) => bill.items)
-              .reduce((sum, item) => sum + item.quantity, 0),
-          )}{" "}
-          ชิ้น
-        </span>
-        <span>
-          ฿
-          {money(
-            visibleBills.reduce(
-              (sum, bill) => sum + bill.expectedAmount,
-              0,
-            ),
-          )}
-        </span>
-      </div>
-
-      {loading && !selected ? (
-        <Loading />
-      ) : selected ? (
-        <section className="delivery-confirm-panel">
-          <header>
-            <div>
-              <span>ตรวจสอบก่อนบันทึก</span>
-              <h2>{selected.shipmentNo}</h2>
-            </div>
-            <span className={`payment-mode ${selected.paymentMode}`}>
-              {PAYMENT_LABELS[selected.paymentMode]}
-            </span>
-          </header>
-          <div className="delivery-parties">
-            <div>
-              <small>ผู้รับ</small>
-              <strong>{selected.receiverName}</strong>
-            </div>
-            <div>
-              <small>ผู้ส่ง</small>
-              <strong>{selected.senderName}</strong>
-            </div>
-          </div>
-          <div className="delivery-items">
-            {selected.items.map((item) => (
-              <div key={item.id}>
-                <span>{item.description}</span>
-                <b>
-                  {number(item.quantity)} {item.unit}
-                </b>
-              </div>
-            ))}
-          </div>
-          <div className="delivery-form-grid">
-            <Field label="ผลการส่ง">
-              <select
-                value={result}
-                onChange={(event) =>
-                  setResult(event.target.value as DeliveryInput["result"])
-                }
-              >
-                {RESULTS.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            {result === "DELIVERED" &&
-              selected.paymentMode === "CASH_DESTINATION" && (
-                <Field label="ยอดเงินที่เก็บได้จริง">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={collected}
-                    onChange={(event) => setCollected(event.target.value)}
-                  />
-                </Field>
-              )}
-            <Field label="รอบส่ง (ไม่บังคับ)">
-              <input
-                placeholder="เช่น รอบเช้า / รถ 81-2345"
-                value={roundReference}
-                onChange={(event) => setRoundReference(event.target.value)}
-              />
-            </Field>
-            <Field label="หมายเหตุ (ไม่บังคับ)">
-              <input
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-              />
-            </Field>
-          </div>
-          <footer>
-            <Button onClick={clearForm}>
-              <RotateCcw size={16} />
-              ยกเลิก
-            </Button>
-            <Button className="primary" busy={busy} onClick={() => void save()}>
-              <CheckCircle2 size={17} />
-              บันทึกผลส่งสินค้า
-            </Button>
-          </footer>
-        </section>
-      ) : (
-        <section className="delivery-queue">
-          <div className="data-table-scroll">
-            <table className="loading-table delivery-table">
-              <thead>
-                <tr>
-                  <th>เลขบิล / วันที่</th>
-                  <th>ผู้รับ</th>
-                  <th>ผู้ส่ง</th>
-                  <th>รายการสินค้า</th>
-                  <th>ชำระเงิน</th>
-                  <th className="numeric">ยอดรอเก็บ</th>
-                  <th>อายุบิล</th>
-                  <th>เลือก</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleBills.map((bill) => (
-                  <tr key={bill.id}>
-                    <td>
-                      <strong>{bill.shipmentNo}</strong>
-                      <small>{thaiDate(bill.openedAt)}</small>
-                    </td>
-                    <td>{bill.receiverName}</td>
-                    <td>{bill.senderName}</td>
-                    <td>
-                      {bill.items
-                        .map(
-                          (item) =>
-                            `${item.description} ${number(item.quantity)} ${item.unit}`,
-                        )
-                        .join(", ")}
-                    </td>
-                    <td>{PAYMENT_LABELS[bill.paymentMode]}</td>
-                    <td className="numeric">{money(bill.expectedAmount)}</td>
-                    <td>{calendarAgeInBangkok(bill.openedAt)} วัน</td>
-                    <td>
-                      <Button onClick={() => selectBill(bill)}>เลือกบิล</Button>
-                    </td>
-                  </tr>
-                ))}
-                {!visibleBills.length && (
-                  <tr>
-                    <td colSpan={8} className="empty-cell">
-                      ไม่พบบิลตามตัวกรอง
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-    </div>
-  );
+      <div className="loading-result-summary"><span>พบ {number(visible.length)} บิล</span><span>{number(visible.reduce((sum, bill) => sum + quantity(bill), 0))} หน่วย</span></div>
+      {loading && !bills.length ? <Loading /> : visible.length === 0 ? <Empty title="ไม่พบบิลรอส่งตามตัวกรองนี้" /> : <div className="data-table-scroll"><table className="data-table delivery-queue-table"><thead><tr><th><input type="checkbox" aria-label="เลือกบิลที่แสดงทั้งหมด" checked={visible.length > 0 && visible.every((bill) => selected.has(bill.id))} onChange={(event) => visible.forEach((bill) => selectBill(bill, event.target.checked))} /></th><th>เลขบิล / วันที่</th><th>ผู้รับ</th><th>ผู้ส่ง</th><th>รายการสินค้า</th><th>อำเภอ</th><th>ชำระเงิน</th><th>คงเหลือ</th><th>อายุบิล</th></tr></thead><tbody>{visible.map((bill) => <tr key={bill.id}><td><input type="checkbox" aria-label={`เลือกบิล ${bill.shipmentNo}`} checked={selected.has(bill.id)} onChange={(event) => selectBill(bill, event.target.checked)} /></td><td><strong>{bill.shipmentNo}</strong><small>{thaiDate(bill.openedAt)}</small></td><td>{bill.receiverName}</td><td>{bill.senderName}</td><td>{bill.items.map((item) => <small key={item.id}>{item.description} {number(item.remaining)} {item.unit}</small>)}</td><td>{bill.district}</td><td>{PAYMENT_LABELS[bill.paymentMode]}</td><td><strong>{number(quantity(bill))}</strong>{bill.partial && <small>ส่งบางส่วน</small>}</td><td>{number(calendarAgeInBangkok(ageBasis === "OPENED" ? bill.openedAt : bill.receivedAt))} วัน</td></tr>)}</tbody></table></div>}
+    </section>
+    {selected.size > 0 && <div className="loading-selection-bar"><div><CheckCircle2 size={19} /><strong>เลือก {number(selected.size)} บิล</strong><span>{number(selectedBills.reduce((sum, bill) => sum + quantity(bill), 0))} หน่วย</span></div><div><Button onClick={() => { setSelected(new Set()); setAmounts({}); }}><X size={16} />ยกเลิกการเลือก</Button><Button onClick={() => setReviewing(true)}><Eye size={16} />ดูรายการที่เลือก</Button><Button className="primary" onClick={() => setReviewing(true)}><Truck size={17} />บันทึกส่งสินค้า</Button></div></div>}
+    {reviewing && <Modal wide title="ตรวจรายการสินค้าที่ส่ง" onClose={() => setReviewing(false)}><div className="modal-body delivery-review-list">{selectedBills.map((bill) => <section key={bill.id}><header><strong>{bill.shipmentNo} · {bill.receiverName}</strong><small>{PAYMENT_LABELS[bill.paymentMode]}</small></header>{bill.items.map((item) => <label key={item.id}><span>{item.description}<small>คงเหลือ {number(item.remaining)} {item.unit}</small></span><input type="number" min="0" max={item.remaining} step="0.0001" value={amounts[item.id] ?? item.remaining} onChange={(event) => setAmounts((current) => ({ ...current, [item.id]: event.target.value }))} /><b>{item.unit}</b></label>)}</section>)}</div><div className="modal-footer"><Button onClick={() => setReviewing(false)}>กลับไปแก้ไข</Button><Button className="primary" busy={busy} onClick={() => void save()}><CheckCircle2 size={17} />ยืนยันส่งสินค้า</Button></div></Modal>}
+  </div>;
 }
