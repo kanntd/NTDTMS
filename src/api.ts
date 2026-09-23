@@ -16,6 +16,7 @@ import type {
   ShipmentEditInput,
   LoadConfirmation,
   LoadTripRecord,
+  LoadTripAllocation,
   LoadTripStatus,
   LoadTripUpdate,
 } from "./types";
@@ -390,7 +391,7 @@ export async function saveLoadTripItems(
 
 export async function setLoadTripStatus(
   id: string,
-  action: "CLOSE" | "DEPART" | "REOPEN" | "CANCEL",
+  action: "CLOSE" | "DEPART" | "RECEIVE" | "REOPEN" | "CANCEL",
   options: {
     vehicleId?: string;
     driverId?: string;
@@ -414,7 +415,7 @@ export async function getLoadTrips(): Promise<LoadTripRecord[]> {
   const manifestResult = await supabase
     .from("load_manifests")
     .select(
-      "id,manifest_no,status,destination_branch_id,vehicle_id,driver_employee_id,loaded_at,departed_at,note,created_at",
+      "id,manifest_no,status,destination_branch_id,vehicle_id,driver_employee_id,loaded_at,departed_at,received_at,note,created_at",
     )
     .order("created_at", { ascending: false })
     .limit(200);
@@ -469,13 +470,13 @@ export async function getLoadTrips(): Promise<LoadTripRecord[]> {
     shipmentIds.length
       ? supabase
           .from("shipments")
-          .select("id,shipment_no,receiver_snapshot,sender_snapshot")
+          .select("id,shipment_no,received_at,payment_mode,total_amount,total_quantity,receiver_snapshot,sender_snapshot,shipment_status")
           .in("id", shipmentIds)
       : Promise.resolve({ data: [], error: null }),
     itemIds.length
       ? supabase
           .from("shipment_items")
-          .select("id,description,quantity,unit")
+          .select("id,description,quantity,unit,unit_price")
           .in("id", itemIds)
       : Promise.resolve({ data: [], error: null }),
     vehicleIds.length
@@ -544,6 +545,7 @@ export async function getLoadTrips(): Promise<LoadTripRecord[]> {
       driverName: drivers.get(driverId) || "",
       loadedAt: String(manifest.loaded_at || manifest.created_at),
       departedAt: String(manifest.departed_at || ""),
+      receivedAt: String(manifest.received_at || ""),
       note: String(manifest.note || ""),
       allocations: lines
         .filter((line) => String(line.manifest_id) === String(manifest.id))
@@ -565,11 +567,51 @@ export async function getLoadTrips(): Promise<LoadTripRecord[]> {
             unit: String(line.unit_snapshot || item?.unit || ""),
             receiverName: String(receiver?.display_name || ""),
             senderName: String(sender?.display_name || ""),
+            openedAt: String(shipment?.received_at || ""),
+            paymentMode: String(
+              shipment?.payment_mode || "CASH_ORIGIN",
+            ) as LoadTripAllocation["paymentMode"],
+            amount:
+              Number(shipment?.total_quantity || 0) > 0
+                ? (Number(shipment?.total_amount || 0) /
+                    Number(shipment?.total_quantity || 0)) *
+                  (Number(line.quantity) || 0)
+                : 0,
+            shipmentStatus: String(
+              shipment?.shipment_status || "IN_TRANSIT",
+            ) as LoadTripAllocation["shipmentStatus"],
             active: Boolean(line.is_active),
           };
         }),
     };
   });
+}
+export async function getDeliveryLines() {
+  const result = await supabase
+    .from("delivery_attempt_item_lines")
+    .select("shipment_id,shipment_item_id,quantity");
+  if (result.error) {
+    if (["42P01", "PGRST205"].includes(result.error.code || "")) return [];
+    throw result.error;
+  }
+  return (result.data || []).map((row) => ({
+    shipmentId: String(row.shipment_id),
+    itemId: String(row.shipment_item_id),
+    quantity: Number(row.quantity) || 0,
+  }));
+}
+export async function recordDelivery(input: import("./types").DeliveryInput) {
+  const result = await supabase.rpc("record_branch_delivery", {
+    data: {
+      shipment_id: input.shipmentId,
+      result: input.result,
+      collected_amount: input.collectedAmount,
+      note: input.note,
+      round_reference: input.roundReference,
+      request_id: input.requestId,
+    },
+  });
+  if (result.error) throw result.error;
 }
 export async function updateLoadTrip(update: LoadTripUpdate) {
   const result = await supabase.rpc("update_load_manifest", {

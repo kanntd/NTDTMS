@@ -10,6 +10,7 @@ import type {
   ShipmentInput,
   ShipmentEditInput,
   StaffInvite,
+  DeliveryInput,
 } from "./types";
 import { ROLE_MODULE_DEFAULTS } from "./types";
 import type {
@@ -46,6 +47,7 @@ type DemoLoad = LoadConfirmation & {
   status: LoadTripStatus;
   note: string;
   loadedAt?: string;
+  receivedAt?: string;
   updatedAt: string;
 };
 
@@ -569,6 +571,11 @@ export function createService(demo: boolean) {
           if (shipment) shipment.shipment_status = "IN_TRANSIT";
         }
         saveDemo(state);
+      } else if (action === "RECEIVE") {
+        if (trip.status !== "DEPARTED")
+          throw new Error("รับรถได้เฉพาะเที่ยวที่ออกจากต้นทางแล้ว");
+        trip.status = "RECEIVED";
+        trip.receivedAt = new Date().toISOString();
       } else if (action === "REOPEN") {
         if (
           trip.status !== "LOADED" ||
@@ -618,7 +625,10 @@ export function createService(demo: boolean) {
         driverId: load.driverId,
         driverName: load.driverName,
         loadedAt: load.loadedAt || load.confirmedAt,
-        departedAt: load.status === "DEPARTED" ? load.confirmedAt : "",
+        departedAt: ["DEPARTED", "RECEIVED"].includes(load.status)
+          ? load.confirmedAt
+          : "",
+        receivedAt: load.receivedAt || "",
         note: load.note,
         allocations: load.allocations.flatMap((allocation) => {
           const shipment = sourceRows.find(
@@ -640,11 +650,74 @@ export function createService(demo: boolean) {
               unit: item.unit,
               receiverName: shipment.receiver_snapshot.display_name,
               senderName: shipment.sender_snapshot.display_name,
+              openedAt: shipment.received_at,
+              paymentMode: shipment.payment_mode,
+              amount:
+                shipment.total_quantity > 0
+                  ? (shipment.total_amount / shipment.total_quantity) *
+                    allocation.quantity
+                  : 0,
+              shipmentStatus: shipment.shipment_status,
               active: load.status !== "CANCELLED",
             },
           ];
         }),
       }));
+    },
+    deliveryLines: async () => {
+      if (!demo) return api.getDeliveryLines();
+      try {
+        return JSON.parse(
+          localStorage.getItem("ntdtms-delivery-lines-v1") || "[]",
+        ) as import("./types").DeliveryLineRecord[];
+      } catch {
+        return [];
+      }
+    },
+    recordDelivery: async (input: DeliveryInput) => {
+      if (!demo) return api.recordDelivery(input);
+      const trips = await createService(true).loadTrips();
+      const available = trips
+        .filter((trip) => trip.status === "RECEIVED")
+        .flatMap((trip) => trip.allocations)
+        .filter(
+          (line) => line.active && line.shipmentId === input.shipmentId,
+        );
+      if (!available.length) throw new Error("บิลนี้ยังไม่มีสินค้าที่สาขารับแล้ว");
+      const existing = await createService(true).deliveryLines();
+      const delivered = new Map<string, number>();
+      existing.forEach((line) =>
+        delivered.set(line.itemId, (delivered.get(line.itemId) || 0) + line.quantity),
+      );
+      const next = available.flatMap((line) => {
+        const quantity = Math.max(0, line.quantity - (delivered.get(line.itemId) || 0));
+        return quantity > 0
+          ? [{ shipmentId: line.shipmentId, itemId: line.itemId, quantity }]
+          : [];
+      });
+      if (!next.length) throw new Error("บิลนี้ไม่มีสินค้าคงเหลือให้บันทึกส่ง");
+      if (input.result === "DELIVERED") {
+        const merged = [...existing, ...next];
+        localStorage.setItem("ntdtms-delivery-lines-v1", JSON.stringify(merged));
+        const shipment = allDemoShipments().find((row) => row.id === input.shipmentId);
+        if (
+          shipment?.payment_mode === "CASH_DESTINATION" &&
+          input.collectedAmount > 0
+        )
+          await createService(true).collect(
+            input.shipmentId,
+            input.collectedAmount,
+            "CASH",
+            "",
+            input.requestId,
+          );
+        const complete = shipment?.items?.every((item) =>
+          merged
+            .filter((line) => line.itemId === item.id)
+            .reduce((sum, line) => sum + line.quantity, 0) >= item.quantity,
+        );
+        if (complete) await createService(true).status(input.shipmentId, "DELIVERED");
+      }
     },
     updateLoadTrip: async (update: LoadTripUpdate) => {
       if (!demo) return api.updateLoadTrip(update);

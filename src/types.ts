@@ -231,7 +231,24 @@ export interface LoadTripAllocation {
   unit: string;
   receiverName: string;
   senderName: string;
+  openedAt?: string;
+  paymentMode?: PaymentMode;
+  amount?: number;
+  shipmentStatus?: Shipment["shipment_status"];
   active: boolean;
+}
+export interface DeliveryLineRecord {
+  shipmentId: string;
+  itemId: string;
+  quantity: number;
+}
+export interface DeliveryInput {
+  shipmentId: string;
+  result: "DELIVERED" | "CUSTOMER_ABSENT" | "REFUSED" | "DAMAGED" | "RESCHEDULED" | "OTHER";
+  collectedAmount: number;
+  note: string;
+  roundReference: string;
+  requestId: string;
 }
 export interface LoadTripRecord {
   id: string;
@@ -245,6 +262,7 @@ export interface LoadTripRecord {
   driverName: string;
   loadedAt: string;
   departedAt: string;
+  receivedAt?: string;
   note: string;
   allocations: LoadTripAllocation[];
 }
@@ -257,7 +275,12 @@ export interface LoadTripUpdate {
   note?: string;
   allocations?: Array<{ lineId: string; quantity: number }>;
 }
-export type LoadTripCommand = "CLOSE" | "DEPART" | "REOPEN" | "CANCEL";
+export type LoadTripCommand =
+  | "CLOSE"
+  | "DEPART"
+  | "RECEIVE"
+  | "REOPEN"
+  | "CANCEL";
 export interface LoadTripItemChange {
   shipmentId: string;
   itemId: string;

@@ -20,6 +20,7 @@ import {
   Tags,
   LayoutDashboard,
   PackageCheck,
+  ClipboardCheck,
 } from "lucide-react";
 import { supabase, getProfile } from "./api";
 import { createService } from "./service";
@@ -44,6 +45,9 @@ import MasterData from "./MasterData";
 import Pricing from "./Pricing";
 import BangkokDashboard from "./BangkokDashboard";
 import LoadingWork from "./LoadingWork";
+import DestinationDashboard from "./DestinationDashboard";
+import { destinationBranches } from "./branchRoutes";
+import DeliveryWork from "./DeliveryWork";
 
 const demoProfile: Profile = {
   id: "demo",
@@ -251,6 +255,11 @@ export default function App() {
     masters.branches.find(
       (branch) => branch.is_active && branch.can_issue_bills,
     );
+  const canUseDestinationDashboard =
+    manager ||
+    destinationBranches(masters.branches, masters.zones).some(
+      (branch) => branch.code === currentBranch?.code,
+    );
   const canOpen = (module: ModuleKey) =>
     profile.role === "owner" ||
     (profile.module_permissions?.[module] ??
@@ -268,6 +277,16 @@ export default function App() {
       : []),
     ...(canOpen("intake")
       ? [{ id: "intake", label: "รับสินค้าและออกบิล", Icon: FilePlus2 }]
+      : []),
+    ...(canOpen("shipments") && canUseDestinationDashboard
+      ? [
+          {
+            id: "destination",
+            label: "ภาพรวมสาขาปลายทาง",
+            Icon: MapPin,
+          },
+          { id: "delivery", label: "งานส่งสินค้า", Icon: ClipboardCheck },
+        ]
       : []),
     ...(canOpen("shipments")
       ? [{ id: "loading", label: "งานขึ้นรถ", Icon: PackageCheck }]
@@ -440,6 +459,10 @@ export default function App() {
               />
             ) : page === "intake" ? (
               <IntakePrototype />
+            ) : page === "destination" ? (
+              <DestinationDashboard />
+            ) : page === "delivery" ? (
+              <DeliveryWork />
             ) : page === "loading" ? (
               <LoadingWork initialBranch={loadBranch} />
             ) : page === "shipments" ? (
