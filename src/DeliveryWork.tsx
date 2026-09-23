@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowUpDown,
   Banknote,
   CheckCircle2,
   ClipboardCheck,
@@ -15,7 +16,8 @@ import { billNumberPrefix } from "./billNumber";
 import { completeBillNumber } from "./loadingQueue";
 import { useWorkspace } from "./context";
 import { destinationBranches } from "./branchRoutes";
-import { money, number } from "./domain";
+import { calendarAgeInBangkok } from "./dashboardQueue";
+import { money, number, thaiDate } from "./domain";
 import { Button, Field, Loading } from "./ui";
 import {
   PAYMENT_LABELS,
@@ -72,6 +74,7 @@ export default function DeliveryWork() {
   const [product, setProduct] = useState("");
   const [unit, setUnit] = useState("");
   const [payment, setPayment] = useState("");
+  const [age, setAge] = useState("");
   const [sort, setSort] = useState("OLDEST");
   const [selected, setSelected] = useState<QueueBill | null>(null);
   const [result, setResult] = useState<DeliveryInput["result"]>("DELIVERED");
@@ -203,7 +206,11 @@ export default function DeliveryWork() {
           (!product ||
             bill.items.some((item) => item.description === product)) &&
           (!unit || bill.items.some((item) => item.unit === unit)) &&
-          (!payment || bill.paymentMode === payment),
+          (!payment || bill.paymentMode === payment) &&
+          (!age ||
+            (age === "MORE_THAN_3"
+              ? calendarAgeInBangkok(bill.openedAt) > 3
+              : calendarAgeInBangkok(bill.openedAt) === Number(age))),
       )
       .sort((a, b) => {
         if (sort === "NEWEST")
@@ -217,7 +224,7 @@ export default function DeliveryWork() {
           );
         return +new Date(a.openedAt) - +new Date(b.openedAt);
       });
-  }, [bills, payment, product, receiver, search, sender, sort, unit]);
+  }, [age, bills, payment, product, receiver, search, sender, sort, unit]);
 
   function selectBill(bill: QueueBill) {
     setSelected(bill);
@@ -302,19 +309,6 @@ export default function DeliveryWork() {
           <p>คีย์เลขบิลแล้วบันทึกผลได้ทันที โดยไม่ต้องสร้างรอบส่ง</p>
         </div>
         <div className="heading-actions">
-          <select
-            aria-label="กรองสาขาปลายทางของงานส่งสินค้า"
-            value={branchCode}
-            disabled={!manager}
-            onChange={(event) => setBranchCode(event.target.value)}
-          >
-            {manager && <option value="">ทุกสาขา</option>}
-            {availableBranches.map((branch) => (
-              <option key={branch.code} value={branch.code}>
-                {branch.name}
-              </option>
-            ))}
-          </select>
           <Button onClick={() => void refresh()} disabled={loading}>
             <RefreshCw size={17} />
             อัปเดตข้อมูล
@@ -391,7 +385,7 @@ export default function DeliveryWork() {
         </form>
       </section>
 
-      <section className="loading-filters delivery-filters">
+      <section className="loading-toolbar delivery-filters">
         <div className="input-icon loading-search">
           <Search size={17} />
           <input
@@ -401,6 +395,19 @@ export default function DeliveryWork() {
             onChange={(event) => setSearch(event.target.value)}
           />
         </div>
+        <select
+          aria-label="กรองสาขาปลายทางของงานส่งสินค้า"
+          value={branchCode}
+          disabled={!manager}
+          onChange={(event) => setBranchCode(event.target.value)}
+        >
+          {manager && <option value="">ทุกสาขา</option>}
+          {availableBranches.map((branch) => (
+            <option key={branch.code} value={branch.code}>
+              {branch.name}
+            </option>
+          ))}
+        </select>
         <select
           value={receiver}
           onChange={(event) => setReceiver(event.target.value)}
@@ -445,13 +452,29 @@ export default function DeliveryWork() {
             </option>
           ))}
         </select>
-        <select value={sort} onChange={(event) => setSort(event.target.value)}>
-          <option value="OLDEST">เก่าสุดก่อน</option>
-          <option value="NEWEST">ใหม่สุดก่อน</option>
-          <option value="RECEIVER">เรียงตามผู้รับ</option>
-          <option value="QUANTITY">จำนวนมากสุดก่อน</option>
+        <select value={age} onChange={(event) => setAge(event.target.value)}>
+          <option value="">ทุกอายุบิล</option>
+          <option value="0">วันนี้</option>
+          <option value="1">ค้าง 1 วัน</option>
+          <option value="2">ค้าง 2 วัน</option>
+          <option value="3">ค้าง 3 วัน</option>
+          <option value="MORE_THAN_3">ค้างมากกว่า 3 วัน</option>
         </select>
+        <label className="loading-sort">
+          <ArrowUpDown size={16} />
+          <select
+            aria-label="เรียงรายการบิลรอส่ง"
+            value={sort}
+            onChange={(event) => setSort(event.target.value)}
+          >
+            <option value="OLDEST">เก่าสุดก่อน</option>
+            <option value="NEWEST">ใหม่สุดก่อน</option>
+            <option value="RECEIVER">ผู้รับ ก-ฮ</option>
+            <option value="QUANTITY">จำนวนมากก่อน</option>
+          </select>
+        </label>
         <Button
+          className="loading-clear"
           title="ล้างตัวกรอง"
           onClick={() => {
             setSearch("");
@@ -460,12 +483,34 @@ export default function DeliveryWork() {
             setProduct("");
             setUnit("");
             setPayment("");
+            setAge("");
             setSort("OLDEST");
           }}
         >
           <X size={16} /> ล้าง
         </Button>
       </section>
+
+      <div className="loading-result-summary delivery-result-summary">
+        <span>พบ {number(visibleBills.length)} บิล</span>
+        <span>
+          {number(
+            visibleBills
+              .flatMap((bill) => bill.items)
+              .reduce((sum, item) => sum + item.quantity, 0),
+          )}{" "}
+          ชิ้น
+        </span>
+        <span>
+          ฿
+          {money(
+            visibleBills.reduce(
+              (sum, bill) => sum + bill.expectedAmount,
+              0,
+            ),
+          )}
+        </span>
+      </div>
 
       {loading && !selected ? (
         <Loading />
@@ -553,25 +598,18 @@ export default function DeliveryWork() {
           </footer>
         </section>
       ) : (
-        <section className="table-card delivery-queue">
-          <div className="table-card-header">
-            <div>
-              <h2>รายการบิลรอส่ง</h2>
-              <p>
-                แสดง {number(visibleBills.length)} จาก {number(bills.length)}{" "}
-                บิล
-              </p>
-            </div>
-          </div>
+        <section className="delivery-queue">
           <div className="data-table-scroll">
-            <table className="data-table">
+            <table className="loading-table delivery-table">
               <thead>
                 <tr>
-                  <th>เลขบิล</th>
+                  <th>เลขบิล / วันที่</th>
                   <th>ผู้รับ</th>
                   <th>ผู้ส่ง</th>
-                  <th>สินค้า</th>
+                  <th>รายการสินค้า</th>
                   <th>ชำระเงิน</th>
+                  <th className="numeric">ยอดรอเก็บ</th>
+                  <th>อายุบิล</th>
                   <th>เลือก</th>
                 </tr>
               </thead>
@@ -580,6 +618,7 @@ export default function DeliveryWork() {
                   <tr key={bill.id}>
                     <td>
                       <strong>{bill.shipmentNo}</strong>
+                      <small>{thaiDate(bill.openedAt)}</small>
                     </td>
                     <td>{bill.receiverName}</td>
                     <td>{bill.senderName}</td>
@@ -592,6 +631,8 @@ export default function DeliveryWork() {
                         .join(", ")}
                     </td>
                     <td>{PAYMENT_LABELS[bill.paymentMode]}</td>
+                    <td className="numeric">{money(bill.expectedAmount)}</td>
+                    <td>{calendarAgeInBangkok(bill.openedAt)} วัน</td>
                     <td>
                       <Button onClick={() => selectBill(bill)}>เลือกบิล</Button>
                     </td>
@@ -599,7 +640,7 @@ export default function DeliveryWork() {
                 ))}
                 {!visibleBills.length && (
                   <tr>
-                    <td colSpan={6} className="empty-cell">
+                    <td colSpan={8} className="empty-cell">
                       ไม่พบบิลตามตัวกรอง
                     </td>
                   </tr>

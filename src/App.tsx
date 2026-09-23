@@ -279,6 +279,15 @@ export default function App() {
       ? [{ id: "intake", label: "รับสินค้าและออกบิล", Icon: FilePlus2 }]
       : []),
     ...(canOpen("shipments")
+      ? [
+          {
+            id: "shipments",
+            label: "ค้นหาและติดตามบิล",
+            Icon: ListOrdered,
+          },
+        ]
+      : []),
+    ...(canOpen("shipments")
       ? [{ id: "loading", label: "งานขึ้นรถ", Icon: PackageCheck }]
       : []),
     ...(canOpen("shipments") && canUseDestinationDashboard
@@ -289,15 +298,6 @@ export default function App() {
             Icon: MapPin,
           },
           { id: "delivery", label: "งานส่งสินค้า", Icon: ClipboardCheck },
-        ]
-      : []),
-    ...(canOpen("shipments")
-      ? [
-          {
-            id: "shipments",
-            label: "ค้นหาและติดตามบิล",
-            Icon: ListOrdered,
-          },
         ]
       : []),
     ...(canOpen("master_data")

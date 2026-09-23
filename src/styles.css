@@ -3279,6 +3279,31 @@ table {
 }
 .delivery-entry-panel form input { border-radius: 0; min-height: 46px; }
 .delivery-entry-panel form button { border-radius: 0 4px 4px 0; }
+.delivery-filters {
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  background: #fff;
+}
+.delivery-result-summary {
+  border-inline: 1px solid var(--border);
+}
+.delivery-queue {
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 6px 6px;
+  overflow: hidden;
+  background: #fff;
+}
+.delivery-table { min-width: 1240px; }
+.delivery-table th:nth-child(1) { width: 170px; }
+.delivery-table th:nth-child(2),
+.delivery-table th:nth-child(3) { width: 170px; }
+.delivery-table th:nth-child(4) { width: 330px; }
+.delivery-table th:nth-child(5) { width: 140px; }
+.delivery-table th:nth-child(6) { width: 120px; }
+.delivery-table th:nth-child(7) { width: 90px; }
+.delivery-table th:nth-child(8) { width: 100px; }
 .delivery-ready {
   display: grid;
   place-items: center;
