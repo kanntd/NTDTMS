@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUpDown, CheckCircle2, Eye, PackageCheck, RefreshCw, ScanLine, Search, Truck, X } from "lucide-react";
+import { ArrowUpDown, CheckCircle2, Eye, PackageCheck, RefreshCw, ScanLine, Search, Trash2, Truck, X } from "lucide-react";
 import { billNumberPrefix } from "./billNumber";
 import { destinationBranches } from "./branchRoutes";
 import { useWorkspace } from "./context";
@@ -24,6 +24,17 @@ type Progress = "" | "NONE" | "PARTIAL";
 const normalize = (value: string) => value.toLocaleLowerCase("th").replace(/[\s.-]/g, "");
 const unique = (values: string[]) => [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "th"));
 const quantity = (bill: Bill) => bill.items.reduce((sum, item) => sum + item.remaining, 0);
+
+function compareBillDate(left: Bill, right: Bill, newestFirst: boolean) {
+  const leftTime = Date.parse(left.receivedAt) || 0;
+  const rightTime = Date.parse(right.receivedAt) || 0;
+  const dateDifference = leftTime - rightTime;
+  const billDifference = left.shipmentNo.localeCompare(right.shipmentNo, "en", {
+    numeric: true,
+  });
+  const difference = dateDifference || billDifference;
+  return newestFirst ? -difference : difference;
+}
 
 export default function DeliveryWork() {
   const w = useWorkspace();
@@ -133,11 +144,25 @@ export default function DeliveryWork() {
         if (group === "RECEIVER" || sort === "RECEIVER") return a.receiverName.localeCompare(b.receiverName, "th");
         if (group === "SENDER" || sort === "SENDER") return a.senderName.localeCompare(b.senderName, "th");
         if (sort === "QUANTITY") return quantity(b) - quantity(a);
-        const difference = +new Date(a.receivedAt) - +new Date(b.receivedAt);
-        return sort === "NEWEST" ? -difference : difference;
+        return compareBillDate(a, b, sort === "NEWEST");
       });
   }, [bills, receiver, sender, product, unit, district, payment, progress, age, ageBasis, search, sort, group]);
   const selectedBills = bills.filter((bill) => selected.has(bill.id));
+  const selectedDeliveryQuantity = selectedBills.reduce(
+    (sum, bill) =>
+      sum +
+      bill.items.reduce((itemSum, item) => {
+        const value = Number(amounts[item.id] ?? item.remaining);
+        return itemSum + (Number.isFinite(value) && value > 0 ? value : 0);
+      }, 0),
+    0,
+  );
+  const invalidDeliveryQuantity = selectedBills.some((bill) =>
+    bill.items.some((item) => {
+      const value = Number(amounts[item.id] ?? item.remaining);
+      return !Number.isFinite(value) || value < 0 || value > item.remaining;
+    }),
+  );
 
   function selectBill(bill: Bill, checked: boolean) {
     setSelected((current) => { const next = new Set(current); checked ? next.add(bill.id) : next.delete(bill.id); return next; });
@@ -202,6 +227,6 @@ export default function DeliveryWork() {
       {loading && !bills.length ? <Loading /> : visible.length === 0 ? <Empty title="ไม่พบบิลรอส่งตามตัวกรองนี้" /> : <div className="data-table-scroll"><table className="data-table delivery-queue-table"><thead><tr><th><input type="checkbox" aria-label="เลือกบิลที่แสดงทั้งหมด" checked={visible.length > 0 && visible.every((bill) => selected.has(bill.id))} onChange={(event) => visible.forEach((bill) => selectBill(bill, event.target.checked))} /></th><th>เลขบิล / วันที่</th><th>ผู้รับ</th><th>ผู้ส่ง</th><th>รายการสินค้า</th><th>อำเภอ</th><th>ชำระเงิน</th><th>คงเหลือ</th><th>อายุบิล</th></tr></thead><tbody>{visible.map((bill) => <tr key={bill.id}><td><input type="checkbox" aria-label={`เลือกบิล ${bill.shipmentNo}`} checked={selected.has(bill.id)} onChange={(event) => selectBill(bill, event.target.checked)} /></td><td><strong>{bill.shipmentNo}</strong><small>{thaiDate(bill.openedAt)}</small></td><td>{bill.receiverName}</td><td>{bill.senderName}</td><td>{bill.items.map((item) => <small key={item.id}>{item.description} {number(item.remaining)} {item.unit}</small>)}</td><td>{bill.district}</td><td>{PAYMENT_LABELS[bill.paymentMode]}</td><td><strong>{number(quantity(bill))}</strong>{bill.partial && <small>ส่งบางส่วน</small>}</td><td>{number(calendarAgeInBangkok(ageBasis === "OPENED" ? bill.openedAt : bill.receivedAt))} วัน</td></tr>)}</tbody></table></div>}
     </section>
     {selected.size > 0 && <div className="loading-selection-bar"><div><CheckCircle2 size={19} /><strong>เลือก {number(selected.size)} บิล</strong><span>{number(selectedBills.reduce((sum, bill) => sum + quantity(bill), 0))} หน่วย</span></div><div><Button onClick={() => { setSelected(new Set()); setAmounts({}); }}><X size={16} />ยกเลิกการเลือก</Button><Button onClick={() => setReviewing(true)}><Eye size={16} />ดูรายการที่เลือก</Button><Button className="primary" onClick={() => setReviewing(true)}><Truck size={17} />บันทึกส่งสินค้า</Button></div></div>}
-    {reviewing && <Modal wide title="ตรวจรายการสินค้าที่ส่ง" onClose={() => setReviewing(false)}><div className="modal-body delivery-review-list">{selectedBills.map((bill) => <section key={bill.id}><header><strong>{bill.shipmentNo} · {bill.receiverName}</strong><small>{PAYMENT_LABELS[bill.paymentMode]}</small></header>{bill.items.map((item) => <label key={item.id}><span>{item.description}<small>คงเหลือ {number(item.remaining)} {item.unit}</small></span><input type="number" min="0" max={item.remaining} step="0.0001" value={amounts[item.id] ?? item.remaining} onChange={(event) => setAmounts((current) => ({ ...current, [item.id]: event.target.value }))} /><b>{item.unit}</b></label>)}</section>)}</div><div className="modal-footer"><Button onClick={() => setReviewing(false)}>กลับไปแก้ไข</Button><Button className="primary" busy={busy} onClick={() => void save()}><CheckCircle2 size={17} />ยืนยันส่งสินค้า</Button></div></Modal>}
+    {reviewing && <Modal wide title={`บิลที่เลือก ${number(selectedBills.length)} บิล`} onClose={() => setReviewing(false)}><div className="modal-body selected-bill-review"><div className="selected-bill-summary"><span>{number(selectedDeliveryQuantity)} ชิ้นที่จะส่ง</span><span>{number(selectedBills.length)} บิล</span><strong>ตรวจจำนวนก่อนยืนยัน</strong></div><div className="data-table-scroll selected-bill-scroll"><table className="data-table selected-bill-table delivery-selected-table"><thead><tr><th>เลขบิล</th><th>ผู้รับ</th><th>ผู้ส่ง</th><th>รายการสินค้า</th><th>จำนวนที่จะส่ง</th><th aria-label="นำออก" /></tr></thead><tbody>{selectedBills.map((bill) => <tr key={bill.id}><td><strong>{bill.shipmentNo}</strong><small>{thaiDate(bill.openedAt)}</small></td><td>{bill.receiverName}</td><td>{bill.senderName}</td><td><div className="selected-bill-items">{bill.items.map((item) => <span key={item.id}>{item.description} <small>{item.unit}</small></span>)}</div></td><td><div className="selected-bill-quantities">{bill.items.map((item) => { const entered = Number(amounts[item.id] ?? item.remaining); const invalid = !Number.isFinite(entered) || entered < 0 || entered > item.remaining; return <label key={item.id} className={invalid ? "invalid" : ""}><input type="number" min="0" max={item.remaining} step="any" value={amounts[item.id] ?? String(item.remaining)} onChange={(event) => setAmounts((current) => ({ ...current, [item.id]: event.target.value }))} aria-label={`จำนวน ${item.description} ที่ส่ง`} /><small>/ {number(item.remaining)} {item.unit}</small></label>; })}</div></td><td><Button title={`นำบิล ${bill.shipmentNo} ออกจากรายการที่เลือก`} onClick={() => { selectBill(bill, false); if (selectedBills.length === 1) setReviewing(false); }}><Trash2 size={16} />นำออก</Button></td></tr>)}</tbody></table></div>{invalidDeliveryQuantity && <div className="alert error">จำนวนที่ส่งต้องไม่เกินจำนวนคงเหลือ</div>}<div className="modal-footer"><Button onClick={() => setReviewing(false)}>กลับไปแก้ไข</Button><Button className="primary" busy={busy} disabled={invalidDeliveryQuantity || selectedDeliveryQuantity === 0} onClick={() => void save()}><CheckCircle2 size={17} />ยืนยันส่งสินค้า</Button></div></div></Modal>}
   </div>;
 }

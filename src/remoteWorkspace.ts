@@ -1,6 +1,7 @@
 import { supabase } from "./api";
 import { pairRateKey } from "./intakeEntryData";
 import type { IntakeRegistrySnapshot } from "./intakeRegistry";
+import type { CatalogItem, IntakeParty } from "./intakeEntryData";
 import type { OperationsState } from "./operationsStore";
 import type { PaymentMode } from "./types";
 
@@ -297,6 +298,12 @@ export type RemoteBillInput = {
   }>;
 };
 
+export type RemoteBillDependencies = {
+  receiver: IntakeParty & { branch_code?: string };
+  sender: IntakeParty & { branch_code?: string };
+  catalog: CatalogItem[];
+};
+
 export function sanitizeRemoteBillItems(items: RemoteBillInput["items"]) {
   return items.map((item) => ({
     ...item,
@@ -307,15 +314,31 @@ export function sanitizeRemoteBillItems(items: RemoteBillInput["items"]) {
   }));
 }
 
-export async function issueRemoteReceptionBill(data: RemoteBillInput) {
-  const result = await supabase.rpc("issue_reception_bill_v2", {
+export async function issueRemoteReceptionBill(
+  data: RemoteBillInput,
+  dependencies: RemoteBillDependencies,
+) {
+  const partyPayload = (party: IntakeParty & { branch_code?: string }) => ({
+    ...party,
+    legal_name: party.name || "",
+    address: party.address_detail || party.address || "",
+    branch_code: party.branch_code || "",
+  });
+  const result = await supabase.rpc("issue_reception_bill_v3", {
     data: {
       ...data,
       items: sanitizeRemoteBillItems(data.items),
     },
+    receiver_data: partyPayload(dependencies.receiver),
+    sender_data: partyPayload(dependencies.sender),
+    catalog_data: dependencies.catalog,
   });
   if (result.error) throw result.error;
-  return result.data as { id: string; number: string };
+  return result.data as {
+    id: string;
+    number: string;
+    catalog_map: Record<string, string>;
+  };
 }
 
 export async function resolveRemotePriceRequest(

@@ -19,6 +19,7 @@ import type {
   LoadTripAllocation,
   LoadTripStatus,
   LoadTripUpdate,
+  CodPaymentRecord,
 } from "./types";
 import { applyRecordedLoads } from "./loadingQueue";
 
@@ -203,7 +204,10 @@ export async function listShipments(
     .select("shipment_id,manifest_id")
     .eq("is_active", true)
     .in("shipment_id", shipmentIds);
-  if (lineResult.error && !["42P01", "PGRST205"].includes(lineResult.error.code || ""))
+  if (
+    lineResult.error &&
+    !["42P01", "PGRST205"].includes(lineResult.error.code || "")
+  )
     throw lineResult.error;
   const manifestIds = [
     ...new Set((lineResult.data || []).map((row) => String(row.manifest_id))),
@@ -231,18 +235,27 @@ export async function listShipments(
     : { data: [], error: null };
   if (vehicleResult.error) throw vehicleResult.error;
   const vehicles = new Map(
-    (vehicleResult.data || []).map((row) => [String(row.id), String(row.plate_no || "")]),
+    (vehicleResult.data || []).map((row) => [
+      String(row.id),
+      String(row.plate_no || ""),
+    ]),
   );
   const manifests = new Map(
     (manifestResult.data || []).map((row) => [String(row.id), row]),
   );
-  const trackingByShipment = new Map<string, (typeof manifestResult.data)[number]>();
+  const trackingByShipment = new Map<
+    string,
+    (typeof manifestResult.data)[number]
+  >();
   for (const line of lineResult.data || []) {
     const manifest = manifests.get(String(line.manifest_id));
     if (!manifest) continue;
     const shipmentId = String(line.shipment_id);
     const current = trackingByShipment.get(shipmentId);
-    if (!current || +new Date(manifest.loaded_at || 0) > +new Date(current.loaded_at || 0))
+    if (
+      !current ||
+      +new Date(manifest.loaded_at || 0) > +new Date(current.loaded_at || 0)
+    )
       trackingByShipment.set(shipmentId, manifest);
   }
   const byShipment = (items.data || []).reduce<Record<string, unknown[]>>(
@@ -258,7 +271,9 @@ export async function listShipments(
       const manifest = trackingByShipment.get(row.id);
       return {
         ...row,
-        manifest_no: manifest ? String(manifest.manifest_no || "") : row.manifest_no,
+        manifest_no: manifest
+          ? String(manifest.manifest_no || "")
+          : row.manifest_no,
         loaded_at: manifest ? String(manifest.loaded_at || "") : row.loaded_at,
         branch_received_at: manifest
           ? String(manifest.received_at || "")
@@ -389,6 +404,29 @@ export async function collectPayment(
       request,
     }),
   );
+}
+export async function getCodPayments(): Promise<CodPaymentRecord[]> {
+  const rows: CodPaymentRecord[] = [];
+  const pageSize = 500;
+  for (let page = 0; page < 40; page += 1) {
+    const result = await supabase
+      .from("payments")
+      .select("shipment_id,amount,received_at,shipments!inner(payment_mode)")
+      .eq("shipments.payment_mode", "CASH_DESTINATION")
+      .order("received_at", { ascending: false })
+      .range(page * pageSize, page * pageSize + pageSize - 1);
+    if (result.error) throw result.error;
+    const batch = result.data || [];
+    rows.push(
+      ...batch.map((row) => ({
+        shipmentId: String(row.shipment_id),
+        amount: Number(row.amount) || 0,
+        receivedAt: String(row.received_at || ""),
+      })),
+    );
+    if (batch.length < pageSize) break;
+  }
+  return rows;
 }
 export async function updateStatus(doc: string, status: string, reason = "") {
   const r = await supabase.rpc("set_shipment_status", { doc, status, reason });
@@ -529,7 +567,9 @@ export async function getLoadTrips(): Promise<LoadTripRecord[]> {
     shipmentIds.length
       ? supabase
           .from("shipments")
-          .select("id,shipment_no,received_at,payment_mode,total_amount,total_quantity,receiver_snapshot,sender_snapshot,shipment_status")
+          .select(
+            "id,shipment_no,received_at,payment_mode,total_amount,total_quantity,receiver_snapshot,sender_snapshot,shipment_status",
+          )
           .in("id", shipmentIds)
       : Promise.resolve({ data: [], error: null }),
     itemIds.length
@@ -663,7 +703,9 @@ export async function getDeliveryLines() {
 export async function getCashDestinationCollections() {
   const result = await supabase
     .from("shipment_collections")
-    .select("shipment_id,amount,collected_at,shipments!inner(destination_branch_code)")
+    .select(
+      "shipment_id,amount,collected_at,shipments!inner(destination_branch_code)",
+    )
     .eq("collection_type", "CASH_DESTINATION")
     .eq("status", "COLLECTED")
     .eq("is_active", true);
@@ -672,7 +714,9 @@ export async function getCashDestinationCollections() {
     throw result.error;
   }
   return (result.data || []).map((row) => {
-    const shipment = Array.isArray(row.shipments) ? row.shipments[0] : row.shipments;
+    const shipment = Array.isArray(row.shipments)
+      ? row.shipments[0]
+      : row.shipments;
     return {
       shipmentId: String(row.shipment_id || ""),
       branchCode: String(shipment?.destination_branch_code || ""),

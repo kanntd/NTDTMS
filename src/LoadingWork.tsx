@@ -90,6 +90,23 @@ function sortedUnique(values: string[]) {
   );
 }
 
+function compareBillDate(
+  leftDate: string,
+  leftBill: string,
+  rightDate: string,
+  rightBill: string,
+  newestFirst: boolean,
+) {
+  const leftTime = Date.parse(leftDate) || 0;
+  const rightTime = Date.parse(rightDate) || 0;
+  const dateDifference = leftTime - rightTime;
+  const billDifference = leftBill.localeCompare(rightBill, "en", {
+    numeric: true,
+  });
+  const difference = dateDifference || billDifference;
+  return newestFirst ? -difference : difference;
+}
+
 export default function LoadingWork({
   initialBranch,
 }: {
@@ -312,8 +329,13 @@ export default function LoadingWork({
           );
         if (sort === "QUANTITY_DESC")
           return b.total_quantity - a.total_quantity;
-        const time = +new Date(a.received_at) - +new Date(b.received_at);
-        return sort === "NEWEST" ? -time : time;
+        return compareBillDate(
+          a.received_at,
+          a.shipment_no,
+          b.received_at,
+          b.shipment_no,
+          sort === "NEWEST",
+        );
       });
   }, [
     branchRows,
@@ -1055,7 +1077,7 @@ export default function LoadingWork({
               <div>
                 <Check size={18} />
                 <strong>เลือกแล้ว {number(selectedRows.length)} บิล</strong>
-                <span>{number(selectedQuantity)} ชิ้น</span>
+                <span>{number(allocationQuantity)} ชิ้น</span>
                 <span>
                   {selectedWeight > 0
                     ? `${number(selectedWeight)} กก.`
@@ -1273,7 +1295,7 @@ export default function LoadingWork({
         >
           <div className="modal-body selected-bill-review">
             <div className="selected-bill-summary">
-              <span>{number(selectedQuantity)} ชิ้น</span>
+              <span>{number(allocationQuantity)} ชิ้น</span>
               <span>
                 {selectedWeight > 0
                   ? `${number(selectedWeight)} กก.`
@@ -1289,7 +1311,7 @@ export default function LoadingWork({
                     <th>ผู้รับ</th>
                     <th>ผู้ส่ง</th>
                     <th>รายการสินค้า</th>
-                    <th className="numeric">จำนวน</th>
+                    <th>จำนวนที่จะขึ้นรถ</th>
                     <th aria-label="นำออก" />
                   </tr>
                 </thead>
@@ -1303,11 +1325,54 @@ export default function LoadingWork({
                       <td>{row.receiver_snapshot.display_name}</td>
                       <td>{row.sender_snapshot.display_name}</td>
                       <td>
-                        {row.items
-                          .map((item) => `${item.description} ${item.unit}`)
-                          .join(", ")}
+                        <div className="selected-bill-items">
+                          {row.items.map((item) => (
+                            <span key={item.id}>
+                              {item.description} <small>{item.unit}</small>
+                            </span>
+                          ))}
+                        </div>
                       </td>
-                      <td className="numeric">{number(row.total_quantity)}</td>
+                      <td>
+                        <div className="selected-bill-quantities">
+                          {row.items.map((item) => {
+                            const entered = Number(
+                              loadQuantities[item.id] ?? item.quantity,
+                            );
+                            const invalid =
+                              !Number.isFinite(entered) ||
+                              entered < 0 ||
+                              entered > item.quantity;
+                            return (
+                              <label
+                                key={item.id}
+                                className={invalid ? "invalid" : ""}
+                              >
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max={item.quantity}
+                                  step="any"
+                                  value={
+                                    loadQuantities[item.id] ??
+                                    String(item.quantity)
+                                  }
+                                  onChange={(event) =>
+                                    setLoadQuantities((current) => ({
+                                      ...current,
+                                      [item.id]: event.target.value,
+                                    }))
+                                  }
+                                  aria-label={`จำนวน ${item.description} ที่ขึ้นรถ`}
+                                />
+                                <small>
+                                  / {number(item.quantity)} {item.unit}
+                                </small>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </td>
                       <td>
                         <Button
                           title={`นำบิล ${row.shipment_no} ออกจากรายการที่เลือก`}
@@ -1325,6 +1390,11 @@ export default function LoadingWork({
                 </tbody>
               </table>
             </div>
+            {invalidAllocation && (
+              <div className="alert error">
+                จำนวนขึ้นรถต้องไม่เกินจำนวนคงเหลือ
+              </div>
+            )}
             <div className="modal-footer">
               <Button
                 onClick={() => {
@@ -1337,6 +1407,7 @@ export default function LoadingWork({
               </Button>
               <Button
                 className="primary"
+                disabled={invalidAllocation || allocations.length === 0}
                 onClick={() => setReviewingSelection(false)}
               >
                 ใช้รายการนี้ต่อ

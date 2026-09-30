@@ -11,6 +11,7 @@ import type {
   ShipmentEditInput,
   StaffInvite,
   DeliveryInput,
+  CodPaymentRecord,
 } from "./types";
 import { ROLE_MODULE_DEFAULTS } from "./types";
 import type {
@@ -31,13 +32,40 @@ import {
   updateReceptionBillStatus,
 } from "./receptionStore";
 
+const DEMO_PAYMENTS_KEY = "ntdtms-demo-payments-v1";
+
+function readDemoPayments(): CodPaymentRecord[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(DEMO_PAYMENTS_KEY) || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDemoPayments(rows: CodPaymentRecord[]) {
+  localStorage.setItem(DEMO_PAYMENTS_KEY, JSON.stringify(rows));
+}
+
+function withDemoPayments<T extends Shipment>(shipment: T): T {
+  const recorded = readDemoPayments()
+    .filter((row) => row.shipmentId === shipment.id)
+    .reduce((sum, row) => sum + row.amount, 0);
+  const unreflected = Math.max(0, recorded - shipment.paid_amount);
+  return {
+    ...shipment,
+    paid_amount: Math.max(shipment.paid_amount, recorded),
+    outstanding_amount: Math.max(0, shipment.outstanding_amount - unreflected),
+  };
+}
+
 function allDemoShipments() {
   const local = readReceptionBills().map(receptionBillToShipment);
   const localIds = new Set(local.map((row) => row.id));
   return [
     ...local,
     ...loadDemo().shipments.filter((row) => !localIds.has(row.id)),
-  ];
+  ].map(withDemoPayments);
 }
 
 const DEMO_LOADS_KEY = "ntdtms-loading-manifests-v2";
@@ -161,10 +189,10 @@ export function createService(demo: boolean) {
     detail: async (id: string) => {
       if (!demo) return api.getShipment(id);
       const local = readReceptionBills().find((bill) => bill.id === id);
-      if (local) return receptionBillToShipment(local);
+      if (local) return withDemoPayments(receptionBillToShipment(local));
       const s = loadDemo().shipments.find((s) => s.id === id);
       if (!s) throw new Error("ไม่พบเอกสาร");
-      return s;
+      return withDemoPayments(s);
     },
     issue: async (input: ShipmentInput) => {
       if (!demo) return api.issueShipment(input);
@@ -198,7 +226,11 @@ export function createService(demo: boolean) {
       if (due < shipment.paid_amount)
         throw new Error("ยอดใหม่ต่ำกว่าเงินที่รับแล้ว");
       const branch = BRANCH_OPTIONS.find(
-        (option) => state.branches.find((item) => item.id === `branch-${option.code.toLowerCase()}`)?.code === input.destination_branch_code || option.code === input.destination_branch_code,
+        (option) =>
+          state.branches.find(
+            (item) => item.id === `branch-${option.code.toLowerCase()}`,
+          )?.code === input.destination_branch_code ||
+          option.code === input.destination_branch_code,
       );
       Object.assign(shipment, {
         sender_party_id: input.sender_id,
@@ -283,15 +315,31 @@ export function createService(demo: boolean) {
     ) => {
       if (!demo)
         return api.collectPayment(doc, amount, method, reference, request);
-      const state = loadDemo(),
-        s = state.shipments.find((s) => s.id === doc)!;
-      if (amount <= 0 || amount > s.outstanding_amount)
+      const current = allDemoShipments().find(
+        (shipment) => shipment.id === doc,
+      );
+      if (!current) throw new Error("ไม่พบบิล");
+      if (amount <= 0 || amount > current.outstanding_amount)
         throw new Error("ยอดรับเงินไม่ถูกต้อง");
-      s.paid_amount = Math.round((s.paid_amount + amount) * 100) / 100;
-      s.outstanding_amount =
-        Math.round((s.total_amount - s.paid_amount) * 100) / 100;
-      saveDemo(state);
+      const payments = readDemoPayments();
+      payments.unshift({
+        shipmentId: doc,
+        amount,
+        receivedAt: new Date().toISOString(),
+      });
+      saveDemoPayments(payments);
+      const state = loadDemo();
+      const stored = state.shipments.find((shipment) => shipment.id === doc);
+      if (stored) {
+        stored.paid_amount =
+          Math.round((current.paid_amount + amount) * 100) / 100;
+        stored.outstanding_amount =
+          Math.round((current.outstanding_amount - amount) * 100) / 100;
+        saveDemo(state);
+      }
     },
+    codPayments: async (): Promise<CodPaymentRecord[]> =>
+      demo ? readDemoPayments() : api.getCodPayments(),
     status: async (doc: string, status: string, reason = "") => {
       if (!demo) return api.updateStatus(doc, status, reason);
       if (
@@ -684,14 +732,16 @@ export function createService(demo: boolean) {
       const available = trips
         .filter((trip) => trip.status === "RECEIVED")
         .flatMap((trip) => trip.allocations)
-        .filter(
-          (line) => line.active && line.shipmentId === input.shipmentId,
-        );
-      if (!available.length) throw new Error("บิลนี้ยังไม่มีสินค้าที่สาขารับแล้ว");
+        .filter((line) => line.active && line.shipmentId === input.shipmentId);
+      if (!available.length)
+        throw new Error("บิลนี้ยังไม่มีสินค้าที่สาขารับแล้ว");
       const existing = await createService(true).deliveryLines();
       const delivered = new Map<string, number>();
       existing.forEach((line) =>
-        delivered.set(line.itemId, (delivered.get(line.itemId) || 0) + line.quantity),
+        delivered.set(
+          line.itemId,
+          (delivered.get(line.itemId) || 0) + line.quantity,
+        ),
       );
       const requested = new Map(
         (input.items || []).map((item) => [item.itemId, item.quantity]),
@@ -707,19 +757,26 @@ export function createService(demo: boolean) {
         if (!Number.isFinite(quantity) || quantity < 0 || quantity > remaining)
           throw new Error(`จำนวนส่ง ${line.description} ไม่ถูกต้อง`);
         return quantity > 0
-          ? [{
-              shipmentId: line.shipmentId,
-              itemId: line.itemId,
-              quantity,
-              deliveredAt: new Date().toISOString(),
-            }]
+          ? [
+              {
+                shipmentId: line.shipmentId,
+                itemId: line.itemId,
+                quantity,
+                deliveredAt: new Date().toISOString(),
+              },
+            ]
           : [];
       });
       if (!next.length) throw new Error("บิลนี้ไม่มีสินค้าคงเหลือให้บันทึกส่ง");
       if (input.result === "DELIVERED") {
         const merged = [...existing, ...next];
-        localStorage.setItem("ntdtms-delivery-lines-v1", JSON.stringify(merged));
-        const shipment = allDemoShipments().find((row) => row.id === input.shipmentId);
+        localStorage.setItem(
+          "ntdtms-delivery-lines-v1",
+          JSON.stringify(merged),
+        );
+        const shipment = allDemoShipments().find(
+          (row) => row.id === input.shipmentId,
+        );
         if (
           shipment?.payment_mode === "CASH_DESTINATION" &&
           input.collectedAmount > 0
@@ -731,12 +788,14 @@ export function createService(demo: boolean) {
             "",
             input.requestId,
           );
-        const complete = shipment?.items?.every((item) =>
-          merged
-            .filter((line) => line.itemId === item.id)
-            .reduce((sum, line) => sum + line.quantity, 0) >= item.quantity,
+        const complete = shipment?.items?.every(
+          (item) =>
+            merged
+              .filter((line) => line.itemId === item.id)
+              .reduce((sum, line) => sum + line.quantity, 0) >= item.quantity,
         );
-        if (complete) await createService(true).status(input.shipmentId, "DELIVERED");
+        if (complete)
+          await createService(true).status(input.shipmentId, "DELIVERED");
       }
     },
     updateLoadTrip: async (update: LoadTripUpdate) => {
@@ -872,8 +931,14 @@ export function createService(demo: boolean) {
         const previous = state.branches.find((branch) => branch.id === id);
         const code = String(data.code).trim().toUpperCase();
         if (!/^[A-Z0-9]{2,8}$/.test(code))
-          throw new Error("รหัสเส้นทางต้องเป็นตัวอักษรอังกฤษหรือตัวเลข 2-8 ตัว");
-        if (state.branches.some((branch) => branch.id !== id && branch.code === code))
+          throw new Error(
+            "รหัสเส้นทางต้องเป็นตัวอักษรอังกฤษหรือตัวเลข 2-8 ตัว",
+          );
+        if (
+          state.branches.some(
+            (branch) => branch.id !== id && branch.code === code,
+          )
+        )
           throw new Error("รหัสเส้นทางนี้ถูกใช้โดยสาขาอื่นแล้ว");
         if (
           previous?.document_code_locked_at &&

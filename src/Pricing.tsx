@@ -1,16 +1,22 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import {
+  AlertTriangle,
+  ArrowLeft,
   ArrowDown,
   ArrowUp,
   Calculator,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Clock3,
   History,
+  MapPin,
+  PackageSearch,
   Pencil,
   RotateCcw,
   Search,
   Tags,
+  UserCheck,
 } from "lucide-react";
 import { useWorkspace } from "./context";
 import { BRANCH_OPTIONS } from "./intakeData";
@@ -83,6 +89,31 @@ type PriceFollowUp = {
   requestedAt: string;
   quantity: number;
 };
+type PriceEvidenceKind =
+  | "DESTINATION_REPORT"
+  | "ACTUAL_COLLECTION"
+  | "RECEIVER_HISTORY"
+  | "AREA_HISTORY"
+  | "EXACT_HISTORY";
+export type PriceEvidence = {
+  id: string;
+  kind: PriceEvidenceKind;
+  label: string;
+  detail: string;
+  price: number;
+  createdAt: string;
+};
+export type PriceRecommendation = {
+  price: number | null;
+  historyPrice: number | null;
+  sourceLabel: string;
+  basis: string;
+  confidence: "high" | "medium" | "review" | "empty";
+  confidenceLabel: string;
+  matchCount: number;
+  conflict: string | null;
+  evidence: PriceEvidence[];
+};
 
 const emptyFilters: PriceFilters = {
   query: "",
@@ -133,6 +164,202 @@ const requestStatusLabel: Record<PriceRequest["status"], string> = {
   RESOLVED: "ยืนยันแล้ว",
   CANCELLED: "ยกเลิกแล้ว",
 };
+
+const originPayments: PaymentMode[] = ["CASH_ORIGIN", "CREDIT_ORIGIN"];
+
+function preferredReferencePrice(rows: { price: number; createdAt: string }[]) {
+  const groups = new Map<
+    string,
+    { price: number; count: number; latest: string }
+  >();
+  for (const row of rows) {
+    const key = row.price.toFixed(2);
+    const group = groups.get(key);
+    if (group) {
+      group.count += 1;
+      if (row.createdAt > group.latest) group.latest = row.createdAt;
+    } else {
+      groups.set(key, {
+        price: row.price,
+        count: 1,
+        latest: row.createdAt,
+      });
+    }
+  }
+  return (
+    [...groups.values()].sort(
+      (a, b) => b.count - a.count || b.latest.localeCompare(a.latest),
+    )[0]?.price ?? null
+  );
+}
+
+export function buildPriceRecommendation(
+  request: PriceRequest,
+  operations: OperationsState,
+  registry: ReturnType<typeof loadIntakeRegistry>,
+): PriceRecommendation {
+  const receiver = registry.parties.find(
+    (party) => party.id === request.receiverId,
+  );
+  const receiverArea = receiver?.district?.trim() || "";
+  const references = operations.agreements
+    .filter((agreement) => agreement.active && agreement.currentVersionId)
+    .flatMap((agreement) => {
+      const version = operations.priceVersions.find(
+        (row) => row.id === agreement.currentVersionId,
+      );
+      return version ? [{ agreement, version }] : [];
+    })
+    .filter(({ agreement }) => {
+      if (request.payment === "CASH_DESTINATION")
+        return (
+          agreement.receiverId === request.receiverId &&
+          agreement.catalogId === request.catalogId &&
+          agreement.payment === request.payment
+        );
+      if (originPayments.includes(request.payment)) {
+        const referenceReceiver = registry.parties.find(
+          (party) => party.id === agreement.receiverId,
+        );
+        const sameArea = receiverArea
+          ? referenceReceiver?.district?.trim() === receiverArea
+          : agreement.branch === request.branch;
+        return (
+          agreement.senderId === request.senderId &&
+          agreement.catalogId === request.catalogId &&
+          originPayments.includes(agreement.payment) &&
+          sameArea
+        );
+      }
+      return (
+        agreement.receiverId === request.receiverId &&
+        agreement.senderId === request.senderId &&
+        agreement.catalogId === request.catalogId &&
+        agreement.payment === request.payment &&
+        agreement.branch === request.branch
+      );
+    })
+    .sort((a, b) => b.version.createdAt.localeCompare(a.version.createdAt));
+
+  const historyKind: PriceEvidenceKind =
+    request.payment === "CASH_DESTINATION"
+      ? "RECEIVER_HISTORY"
+      : originPayments.includes(request.payment)
+        ? "AREA_HISTORY"
+        : "EXACT_HISTORY";
+  const historicalEvidence: PriceEvidence[] = references.map(
+    ({ agreement, version }) => {
+      const referenceReceiver = registry.parties.find(
+        (party) => party.id === agreement.receiverId,
+      );
+      const label =
+        historyKind === "RECEIVER_HISTORY"
+          ? partyName(registry.parties, agreement.senderId)
+          : historyKind === "AREA_HISTORY"
+            ? partyName(registry.parties, agreement.receiverId)
+            : "ราคามาตรฐานเดิม";
+      const detail =
+        historyKind === "AREA_HISTORY"
+          ? `${referenceReceiver?.district || branchLabel(agreement.branch)} · ${PAYMENT_LABELS[agreement.payment]}`
+          : `${PAYMENT_LABELS[agreement.payment]} · ${branchLabel(agreement.branch)} · เริ่มใช้ ${thaiDate(version.effectiveFrom)}`;
+      return {
+        id: version.id,
+        kind: historyKind,
+        label,
+        detail,
+        price: version.price,
+        createdAt: version.createdAt,
+      };
+    },
+  );
+  const historyPrice = preferredReferencePrice(historicalEvidence);
+  const collectedUnitPrice =
+    request.actualCollectedAmount !== null && request.quantity > 0
+      ? Math.round((request.actualCollectedAmount / request.quantity) * 100) /
+        100
+      : null;
+  const directPrice = request.proposedPrice ?? collectedUnitPrice;
+  const directEvidence: PriceEvidence[] = [];
+  if (request.proposedPrice !== null)
+    directEvidence.push({
+      id: `${request.id}-reported`,
+      kind: "DESTINATION_REPORT",
+      label: "พนักงานปลายทางแจ้งราคา",
+      detail: `${request.submittedBy || "ผู้ให้ข้อมูลราคา"} · ${thaiDate(request.submittedAt || request.requestedAt)}`,
+      price: request.proposedPrice,
+      createdAt: request.submittedAt || request.requestedAt,
+    });
+  if (collectedUnitPrice !== null)
+    directEvidence.push({
+      id: `${request.id}-collected`,
+      kind: "ACTUAL_COLLECTION",
+      label: "ยอดที่เก็บได้จริง",
+      detail: `ยอดรวม ฿ ${money(request.actualCollectedAmount || 0)} ÷ ${request.quantity} หน่วย`,
+      price: collectedUnitPrice,
+      createdAt: request.requestedAt,
+    });
+
+  const price = directPrice ?? historyPrice;
+  const conflict =
+    directPrice !== null &&
+    historyPrice !== null &&
+    Math.abs(directPrice - historyPrice) >= 0.01
+      ? `ราคาที่ปลายทางแจ้งต่างจากราคาอ้างอิง ฿ ${money(Math.abs(directPrice - historyPrice))} ต่อหน่วย`
+      : null;
+  const sourceLabel =
+    directPrice !== null
+      ? "ข้อมูลจากปลายทาง"
+      : !historicalEvidence.length
+        ? "ยังไม่มีข้อมูลอ้างอิง"
+        : historyKind === "RECEIVER_HISTORY"
+          ? "ประวัติผู้รับ"
+          : historyKind === "AREA_HISTORY"
+            ? "ประวัติสินค้าในพื้นที่"
+            : "ราคามาตรฐานเดิม";
+  const basis =
+    directPrice !== null && historicalEvidence.length
+      ? conflict
+        ? "ใช้ราคาที่ปลายทางแจ้งเป็นจุดเริ่มต้น และแสดงประวัติที่ต่างกันให้ตรวจสอบ"
+        : "ราคาที่ปลายทางแจ้งตรงกับประวัติราคาที่เกี่ยวข้อง"
+      : directPrice !== null
+        ? "อ้างอิงจากราคาหรือยอดเก็บจริงที่พนักงานปลายทางแจ้ง"
+        : historyKind === "RECEIVER_HISTORY" && historicalEvidence.length
+          ? `อ้างอิงผู้รับรายเดียวกัน สินค้าและวิธีชำระเดียวกัน จาก ${historicalEvidence.length} รายการ โดยไม่ยึดผู้ส่ง`
+          : historyKind === "AREA_HISTORY" && historicalEvidence.length
+            ? `อ้างอิงผู้ส่งและสินค้าเดียวกันใน${receiverArea || branchLabel(request.branch)} จาก ${historicalEvidence.length} รายการ`
+            : historicalEvidence.length
+              ? "อ้างอิงราคามาตรฐานที่ตรงกับเงื่อนไขของบิล"
+              : "ยังไม่มีประวัติราคาเพียงพอ ต้องตรวจสอบกับปลายทาง";
+  const confidence: PriceRecommendation["confidence"] = conflict
+    ? "review"
+    : directPrice !== null && historicalEvidence.length > 0
+      ? "high"
+      : directPrice !== null || historicalEvidence.length > 0
+        ? "medium"
+        : "empty";
+  const confidenceLabel =
+    confidence === "high"
+      ? "ความน่าเชื่อถือสูง"
+      : confidence === "medium"
+        ? directPrice !== null
+          ? "ข้อมูลตรงจากปลายทาง"
+          : `มีข้อมูลอ้างอิง ${historicalEvidence.length} รายการ`
+        : confidence === "review"
+          ? "ควรตรวจสอบ"
+          : "ยังไม่มีราคาแนะนำ";
+
+  return {
+    price,
+    historyPrice,
+    sourceLabel,
+    basis,
+    confidence,
+    confidenceLabel,
+    matchCount: historicalEvidence.length,
+    conflict,
+    evidence: [...directEvidence, ...historicalEvidence].slice(0, 6),
+  };
+}
 
 export function applyResolvedPriceToLocalBills(
   request: PriceRequest,
@@ -239,7 +466,7 @@ export default function Pricing() {
   const [registry, setRegistry] = useState(loadIntakeRegistry);
   const [operations, setOperations] = useState(loadOperations);
   const [loadingRemote, setLoadingRemote] = useState(!w.demo);
-  const [tab, setTab] = useState<Tab>("current");
+  const [tab, setTab] = useState<Tab>("pending");
   const [filters, setFilters] = useState<PriceFilters>(emptyFilters);
   const [pendingStatus, setPendingStatus] = useState<
     PriceRequest["status"] | ""
@@ -350,6 +577,12 @@ export default function Pricing() {
         .toLocaleLowerCase("th")
         .includes(normalized),
     );
+  const pendingRecommendations = new Map(
+    pendingRows.map((row) => [
+      row.id,
+      buildPriceRecommendation(row, operations, registry),
+    ]),
+  );
   const historyRows = [...operations.priceVersions]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .filter((version) => {
@@ -374,6 +607,9 @@ export default function Pricing() {
   ).length;
   const waitingForApproval = pendingRows.filter(
     (row) => row.status === "PENDING_APPROVAL",
+  ).length;
+  const recommendedCount = [...pendingRecommendations.values()].filter(
+    (recommendation) => recommendation.price !== null,
   ).length;
   const filteredCount =
     tab === "current"
@@ -401,27 +637,164 @@ export default function Pricing() {
     setHistoryApprover("");
   }
 
+  function savePriceRequest(
+    proposedPrice: number | null,
+    approvedPrice: number | null,
+    actualCollectedAmount: number | null,
+    decision: "STANDARD" | "BILL_ONLY" | "SUBMIT" | "RETURN",
+    note: string,
+  ) {
+    if (!resolving) return;
+    if (!w.demo && (decision === "STANDARD" || decision === "BILL_ONLY")) {
+      void resolveRemotePriceRequest(
+        resolving.id,
+        approvedPrice!,
+        decision,
+        note,
+      )
+        .then(async (result) => {
+          const workspace = await loadRemoteWorkspace();
+          setRegistry(workspace.registry);
+          setOperations(workspace.operations);
+          w.refresh();
+          w.toast(
+            decision === "STANDARD"
+              ? `ยืนยันราคาและอัปเดตบิลรอราคา ${result.affected_requests} บิลแล้ว`
+              : "ยืนยันราคาเฉพาะบิลแล้ว ราคามาตรฐานไม่เปลี่ยน",
+          );
+          setResolving(null);
+        })
+        .catch((error) =>
+          w.toast(`ยืนยันราคาไม่สำเร็จ: ${error.message}`, true),
+        );
+      return;
+    }
+    const next = structuredClone(operations);
+    const request = next.priceRequests.find((row) => row.id === resolving.id);
+    if (!request) return;
+    request.actualCollectedAmount = actualCollectedAmount;
+    const timestamp = new Date().toISOString();
+    if (decision === "SUBMIT") {
+      request.proposedPrice = proposedPrice;
+      request.note = note;
+      request.status = "PENDING_APPROVAL";
+      request.submittedAt = timestamp;
+      request.submittedBy = "ผู้ให้ข้อมูลราคา";
+      request.returnReason = undefined;
+    } else if (decision === "RETURN") {
+      request.status = "RETURNED";
+      request.returnedAt = timestamp;
+      request.returnedBy = "ผู้ดูแล NTD";
+      request.returnReason = note;
+    } else {
+      const finalPrice = approvedPrice!;
+      request.approvedPrice = finalPrice;
+      request.approvalNote = note;
+      request.status = "RESOLVED";
+      request.resolutionType = decision;
+      request.resolvedAt = timestamp;
+      request.resolvedBy = "ผู้ดูแล NTD";
+      const nextPendingBill = w.demo
+        ? applyResolvedPriceToLocalBills(request, finalPrice, decision)
+        : null;
+      if (decision === "BILL_ONLY" && nextPendingBill) {
+        next.priceRequests.push({
+          id: crypto.randomUUID(),
+          key: request.key,
+          receiverId: request.receiverId,
+          senderId: request.senderId,
+          catalogId: request.catalogId,
+          payment: request.payment,
+          branch: request.branch,
+          billNumber: nextPendingBill.billNumber,
+          quantity: nextPendingBill.quantity,
+          proposedPrice: null,
+          approvedPrice: null,
+          actualCollectedAmount: null,
+          status: "PENDING_PRICE",
+          requestedAt: nextPendingBill.requestedAt,
+          note: "รอข้อมูลราคา หลังคำขอก่อนหน้าอนุมัติเฉพาะบิล",
+        });
+      }
+    }
+    if (decision === "STANDARD")
+      addPriceVersion(next, {
+        receiverId: request.receiverId,
+        senderId: request.senderId,
+        catalogId: request.catalogId,
+        payment: request.payment,
+        branch: request.branch,
+        price: approvedPrice!,
+        reason: note.trim() || `อนุมัติจากคำขอราคา ${request.billNumber}`,
+        effectiveFrom: request.requestedAt.slice(0, 10),
+        source: "PRICE_REQUEST",
+      });
+    commit(
+      next,
+      decision === "STANDARD"
+        ? "ยืนยันราคาและสร้างราคามาตรฐานแล้ว"
+        : decision === "BILL_ONLY"
+          ? "ยืนยันราคาเฉพาะบิลแล้ว ราคามาตรฐานไม่เปลี่ยน"
+          : decision === "RETURN"
+            ? "ส่งกลับให้ปลายทางแก้ราคาแล้ว"
+            : "บันทึกราคาแล้ว ส่งให้บัญชียืนยัน",
+    );
+    setResolving(null);
+  }
+
+  const activeRequest = resolving
+    ? operations.priceRequests.find((row) => row.id === resolving.id) ||
+      resolving
+    : null;
+  if (activeRequest)
+    return (
+      <div className="ops-page pricing-page">
+        <PriceRequestDetail
+          request={activeRequest}
+          recommendation={
+            pendingRecommendations.get(activeRequest.id) ||
+            buildPriceRecommendation(activeRequest, operations, registry)
+          }
+          registry={registry}
+          onBack={() => setResolving(null)}
+          onSave={savePriceRequest}
+        />
+      </div>
+    );
+
   return (
     <div className="ops-page pricing-page">
       <header className="ops-heading">
         <div>
-          <h1>ราคาและคำขอราคา</h1>
-          <p>ราคาแยกตามผู้รับ ผู้ส่ง สินค้า หน่วย การชำระเงิน และสาขา</p>
+          <h1>อัปเดตราคา</h1>
+          <p>ค้นหารายการ ตรวจหลักฐาน และยืนยันราคาก่อนนำไปใช้กับบิล</p>
         </div>
         <div className="pricing-kpis">
-          <span>
-            <strong>{currentRows.length}</strong> ราคาปัจจุบัน
-          </span>
           <span className={pendingRows.length ? "attention" : ""}>
+            <strong>{pendingRows.length}</strong> รายการที่พบ
+          </span>
+          <span className={waitingForPrice ? "attention" : ""}>
             <strong>{waitingForPrice}</strong> รอใส่ราคา
           </span>
           <span className={waitingForApproval ? "attention" : ""}>
             <strong>{waitingForApproval}</strong> รอบัญชียืนยัน
           </span>
+          <span>
+            <strong>{recommendedCount}</strong> มีราคาแนะนำ
+          </span>
         </div>
       </header>
 
       <div className="ops-tabs" role="tablist" aria-label="งานราคา">
+        <button
+          role="tab"
+          aria-selected={tab === "pending"}
+          className={tab === "pending" ? "active" : ""}
+          onClick={() => setTab("pending")}
+        >
+          <Clock3 size={16} />
+          งานรออัปเดต{pendingRows.length > 0 && <b>{pendingRows.length}</b>}
+        </button>
         <button
           role="tab"
           aria-selected={tab === "current"}
@@ -430,15 +803,6 @@ export default function Pricing() {
         >
           <Tags size={16} />
           ราคาปัจจุบัน
-        </button>
-        <button
-          role="tab"
-          aria-selected={tab === "pending"}
-          className={tab === "pending" ? "active" : ""}
-          onClick={() => setTab("pending")}
-        >
-          <Clock3 size={16} />
-          คำขอราคา{pendingRows.length > 0 && <b>{pendingRows.length}</b>}
         </button>
         <button
           role="tab"
@@ -498,6 +862,7 @@ export default function Pricing() {
       {tab === "pending" && (
         <PendingPrices
           rows={pendingRows}
+          recommendations={pendingRecommendations}
           registry={registry}
           onResolve={setResolving}
         />
@@ -542,121 +907,6 @@ export default function Pricing() {
             });
             commit(next, "บันทึกราคาเวอร์ชันใหม่แล้ว");
             setEditing(null);
-          }}
-        />
-      )}
-
-      {resolving && (
-        <ResolvePrice
-          request={resolving}
-          onClose={() => setResolving(null)}
-          onSave={(
-            proposedPrice,
-            approvedPrice,
-            actualCollectedAmount,
-            decision,
-            note,
-          ) => {
-            if (
-              !w.demo &&
-              (decision === "STANDARD" || decision === "BILL_ONLY")
-            ) {
-              void resolveRemotePriceRequest(
-                resolving.id,
-                approvedPrice!,
-                decision,
-                note,
-              )
-                .then(async (result) => {
-                  const workspace = await loadRemoteWorkspace();
-                  setRegistry(workspace.registry);
-                  setOperations(workspace.operations);
-                  w.refresh();
-                  w.toast(
-                    decision === "STANDARD"
-                      ? `ยืนยันราคาและอัปเดตบิลรอราคา ${result.affected_requests} บิลแล้ว`
-                      : "ยืนยันราคาเฉพาะบิลแล้ว ราคามาตรฐานไม่เปลี่ยน",
-                  );
-                  setResolving(null);
-                })
-                .catch((error) =>
-                  w.toast(`ยืนยันราคาไม่สำเร็จ: ${error.message}`, true),
-                );
-              return;
-            }
-            const next = structuredClone(operations);
-            const request = next.priceRequests.find(
-              (row) => row.id === resolving.id,
-            )!;
-            request.actualCollectedAmount = actualCollectedAmount;
-            const timestamp = new Date().toISOString();
-            if (decision === "SUBMIT") {
-              request.proposedPrice = proposedPrice;
-              request.note = note;
-              request.status = "PENDING_APPROVAL";
-              request.submittedAt = timestamp;
-              request.submittedBy = "ผู้ให้ข้อมูลราคา";
-              request.returnReason = undefined;
-            } else if (decision === "RETURN") {
-              request.status = "RETURNED";
-              request.returnedAt = timestamp;
-              request.returnedBy = "ผู้ดูแล NTD";
-              request.returnReason = note;
-            } else {
-              const finalPrice = approvedPrice!;
-              request.approvedPrice = finalPrice;
-              request.approvalNote = note;
-              request.status = "RESOLVED";
-              request.resolutionType = decision;
-              request.resolvedAt = timestamp;
-              request.resolvedBy = "ผู้ดูแล NTD";
-              const nextPendingBill = w.demo
-                ? applyResolvedPriceToLocalBills(request, finalPrice, decision)
-                : null;
-              if (decision === "BILL_ONLY" && nextPendingBill) {
-                next.priceRequests.push({
-                  id: crypto.randomUUID(),
-                  key: request.key,
-                  receiverId: request.receiverId,
-                  senderId: request.senderId,
-                  catalogId: request.catalogId,
-                  payment: request.payment,
-                  branch: request.branch,
-                  billNumber: nextPendingBill.billNumber,
-                  quantity: nextPendingBill.quantity,
-                  proposedPrice: null,
-                  approvedPrice: null,
-                  actualCollectedAmount: null,
-                  status: "PENDING_PRICE",
-                  requestedAt: nextPendingBill.requestedAt,
-                  note: "รอข้อมูลราคา หลังคำขอก่อนหน้าอนุมัติเฉพาะบิล",
-                });
-              }
-            }
-            if (decision === "STANDARD")
-              addPriceVersion(next, {
-                receiverId: request.receiverId,
-                senderId: request.senderId,
-                catalogId: request.catalogId,
-                payment: request.payment,
-                branch: request.branch,
-                price: approvedPrice!,
-                reason:
-                  note.trim() || `อนุมัติจากคำขอราคา ${request.billNumber}`,
-                effectiveFrom: request.requestedAt.slice(0, 10),
-                source: "PRICE_REQUEST",
-              });
-            commit(
-              next,
-              decision === "STANDARD"
-                ? "ยืนยันราคาและสร้างราคามาตรฐานแล้ว"
-                : decision === "BILL_ONLY"
-                  ? "ยืนยันราคาเฉพาะบิลแล้ว ราคามาตรฐานไม่เปลี่ยน"
-                  : decision === "RETURN"
-                    ? "ส่งกลับให้ปลายทางแก้ราคาแล้ว"
-                    : "บันทึกราคาแล้ว ส่งให้บัญชียืนยัน",
-            );
-            setResolving(null);
           }}
         />
       )}
@@ -800,7 +1050,10 @@ function PriceFilterBar({
               value={pendingStatus}
               emptyLabel="ทุกสถานะ"
               options={[
-                { id: "PENDING_PRICE", label: requestStatusLabel.PENDING_PRICE },
+                {
+                  id: "PENDING_PRICE",
+                  label: requestStatusLabel.PENDING_PRICE,
+                },
                 {
                   id: "PENDING_APPROVAL",
                   label: requestStatusLabel.PENDING_APPROVAL,
@@ -813,10 +1066,7 @@ function PriceFilterBar({
             />
             <label className="pricing-filter-control">
               <span>เปิดบิลตั้งแต่วันที่</span>
-              <DateInput
-                value={requestFrom}
-                onChange={onRequestFrom}
-              />
+              <DateInput value={requestFrom} onChange={onRequestFrom} />
             </label>
             <label className="pricing-filter-control">
               <span>ถึงวันที่</span>
@@ -832,10 +1082,7 @@ function PriceFilterBar({
           <>
             <label className="pricing-filter-control">
               <span>ตั้งแต่วันที่</span>
-              <DateInput
-                value={historyFrom}
-                onChange={onHistoryFrom}
-              />
+              <DateInput value={historyFrom} onChange={onHistoryFrom} />
             </label>
             <label className="pricing-filter-control">
               <span>ถึงวันที่</span>
@@ -1024,7 +1271,10 @@ function CurrentPrices({
                 <td>
                   v{version?.version}
                   <small>
-                    เริ่ม {version?.effectiveFrom ? thaiDate(version.effectiveFrom) : "–"}
+                    เริ่ม{" "}
+                    {version?.effectiveFrom
+                      ? thaiDate(version.effectiveFrom)
+                      : "–"}
                   </small>
                 </td>
                 <td className="ops-actions">
@@ -1046,10 +1296,12 @@ function CurrentPrices({
 
 function PendingPrices({
   rows,
+  recommendations,
   registry,
   onResolve,
 }: {
   rows: PriceRequest[];
+  recommendations: Map<string, PriceRecommendation>;
   registry: ReturnType<typeof loadIntakeRegistry>;
   onResolve: (row: PriceRequest) => void;
 }) {
@@ -1060,67 +1312,93 @@ function PendingPrices({
       </Empty>
     );
   return (
-    <div className="ops-table-wrap">
-      <table className="ops-table">
+    <div className="ops-table-wrap pending-price-table-wrap">
+      <table className="ops-table pending-price-table">
         <thead>
           <tr>
+            <th>สถานะ</th>
             <th>เลขบิล</th>
-            <th>วันที่เปิดบิล</th>
             <th>ผู้รับ / ผู้ส่ง</th>
             <th>สินค้า / หน่วย</th>
-            <th>เงื่อนไข</th>
-            <th>สถานะ</th>
-            <th>ราคาที่เสนอ</th>
-            <th>ยอดเก็บจริง</th>
-            <th>วันที่ขอ</th>
+            <th>การชำระ / พื้นที่</th>
+            <th>ราคาจากปลายทาง</th>
+            <th>ราคาแนะนำ / อ้างอิง</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={row.id}>
-              <td>
-                <strong>{row.billNumber || "ยังไม่ออกเลข"}</strong>
-              </td>
-              <td>{thaiDate(row.requestedAt)}</td>
-              <td>
-                {partyName(registry.parties, row.receiverId)}
-                <small>{partyName(registry.parties, row.senderId)}</small>
-              </td>
-              <td>{catalogName(registry.catalog, row.catalogId)}</td>
-              <td>
-                {PAYMENT_LABELS[row.payment]}
-                <small>{branchLabel(row.branch)}</small>
-              </td>
-              <td>
-                <span className={`request-status ${row.status.toLowerCase()}`}>
-                  {requestStatusLabel[row.status]}
-                </span>
-                {row.returnReason && <small>{row.returnReason}</small>}
-              </td>
-              <td>
-                {row.proposedPrice === null
-                  ? "ยังไม่ระบุ"
-                  : `฿ ${money(row.proposedPrice)} / หน่วย`}
-              </td>
-              <td>
-                {row.actualCollectedAmount === null
-                  ? "–"
-                  : `฿ ${money(row.actualCollectedAmount)}`}
-              </td>
-              <td>{thaiDate(row.requestedAt)}</td>
-              <td>
-                <Button
-                  className="compact primary"
-                  onClick={() => onResolve(row)}
-                >
-                  {row.status === "PENDING_APPROVAL"
-                    ? "บัญชียืนยัน"
-                    : "ใส่ราคา"}
-                </Button>
-              </td>
-            </tr>
-          ))}
+          {rows.map((row) => {
+            const recommendation = recommendations.get(row.id)!;
+            const receiver = registry.parties.find(
+              (party) => party.id === row.receiverId,
+            );
+            return (
+              <tr key={row.id}>
+                <td>
+                  <span
+                    className={`request-status ${row.status.toLowerCase()}`}
+                  >
+                    {requestStatusLabel[row.status]}
+                  </span>
+                  {row.returnReason && <small>{row.returnReason}</small>}
+                </td>
+                <td>
+                  <strong>{row.billNumber || "ยังไม่ออกเลข"}</strong>
+                  <small>{thaiDate(row.requestedAt)}</small>
+                </td>
+                <td>
+                  <strong>{partyName(registry.parties, row.receiverId)}</strong>
+                  <small>{partyName(registry.parties, row.senderId)}</small>
+                </td>
+                <td>{catalogName(registry.catalog, row.catalogId)}</td>
+                <td>
+                  {PAYMENT_LABELS[row.payment]}
+                  <small>{receiver?.district || branchLabel(row.branch)}</small>
+                </td>
+                <td>
+                  {row.proposedPrice === null ? (
+                    <span className="price-muted">ยังไม่ระบุ</span>
+                  ) : (
+                    <span className="price-number">
+                      ฿ {money(row.proposedPrice)}
+                    </span>
+                  )}
+                  {row.actualCollectedAmount !== null && (
+                    <small>เก็บจริง ฿ {money(row.actualCollectedAmount)}</small>
+                  )}
+                </td>
+                <td>
+                  {recommendation.price === null ? (
+                    <span className="price-muted">ต้องตรวจสอบ</span>
+                  ) : (
+                    <span className="price-number recommended">
+                      ฿ {money(recommendation.price)}
+                    </span>
+                  )}
+                  <small
+                    className={`recommendation-confidence ${recommendation.confidence}`}
+                  >
+                    {recommendation.confidenceLabel}
+                  </small>
+                  <small>
+                    {recommendation.sourceLabel}
+                    {recommendation.matchCount
+                      ? ` · ${recommendation.matchCount} รายการ`
+                      : ""}
+                  </small>
+                </td>
+                <td className="ops-actions">
+                  <Button
+                    className="compact pending-detail-button"
+                    onClick={() => onResolve(row)}
+                  >
+                    ดูรายละเอียด
+                    <ChevronRight size={15} />
+                  </Button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -1267,13 +1545,24 @@ function PriceEditor({
   );
 }
 
-function ResolvePrice({
+function PriceEvidenceIcon({ kind }: { kind: PriceEvidenceKind }) {
+  if (kind === "DESTINATION_REPORT" || kind === "ACTUAL_COLLECTION")
+    return <UserCheck size={18} />;
+  if (kind === "AREA_HISTORY") return <MapPin size={18} />;
+  return <PackageSearch size={18} />;
+}
+
+function PriceRequestDetail({
   request,
-  onClose,
+  recommendation,
+  registry,
+  onBack,
   onSave,
 }: {
   request: PriceRequest;
-  onClose: () => void;
+  recommendation: PriceRecommendation;
+  registry: ReturnType<typeof loadIntakeRegistry>;
+  onBack: () => void;
   onSave: (
     proposedPrice: number | null,
     approvedPrice: number | null,
@@ -1283,13 +1572,20 @@ function ResolvePrice({
   ) => void;
 }) {
   const awaitingApproval = request.status === "PENDING_APPROVAL";
+  const suggestedPrice = recommendation.price;
   const [proposedPrice, setProposedPrice] = useState(
-    request.proposedPrice === null ? "" : String(request.proposedPrice),
+    request.proposedPrice === null
+      ? suggestedPrice === null
+        ? ""
+        : String(suggestedPrice)
+      : String(request.proposedPrice),
   );
   const [approvedPrice, setApprovedPrice] = useState(
     request.approvedPrice === null
       ? request.proposedPrice === null
-        ? ""
+        ? suggestedPrice === null
+          ? ""
+          : String(suggestedPrice)
         : String(request.proposedPrice)
       : String(request.approvedPrice),
   );
@@ -1302,166 +1598,292 @@ function ResolvePrice({
     "STANDARD" | "BILL_ONLY" | "SUBMIT" | "RETURN"
   >(awaitingApproval ? "STANDARD" : "SUBMIT");
   const [reason, setReason] = useState("");
+  const receiver = registry.parties.find(
+    (party) => party.id === request.receiverId,
+  );
+  const detailTitle = awaitingApproval
+    ? "บัญชียืนยันราคา"
+    : request.status === "RETURNED"
+      ? "แก้ราคาที่ถูกส่งกลับ"
+      : "ตรวจและระบุราคา";
   return (
-    <Modal
-      title={
-        awaitingApproval
-          ? "บัญชียืนยันคำขอราคา"
-          : request.status === "RETURNED"
-            ? "แก้ราคาที่ถูกส่งกลับ"
-            : "ระบุข้อมูลราคา"
-      }
-      onClose={onClose}
-    >
-      <form
-        className="ops-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSave(
-            proposedPrice === "" ? null : Number(proposedPrice),
-            approvedPrice === "" ? null : Number(approvedPrice),
-            actualCollectedAmount === "" ? null : Number(actualCollectedAmount),
-            decision,
-            reason,
-          );
-        }}
-      >
-        <div className="request-context">
-          <strong>{request.billNumber}</strong>
-          <span>
-            {PAYMENT_LABELS[request.payment]} · {branchLabel(request.branch)} ·
-            จำนวน {request.quantity}
-          </span>
+    <div className="price-request-detail-page">
+      <Button className="price-detail-back" type="button" onClick={onBack}>
+        <ArrowLeft size={16} />
+        กลับไปตารางรายการ
+      </Button>
+
+      <header className="price-detail-heading">
+        <div>
+          <span>เลขบิล {request.billNumber || "ยังไม่ออกเลข"}</span>
+          <h1>{detailTitle}</h1>
+          <p>
+            {catalogName(registry.catalog, request.catalogId)} · จำนวน{" "}
+            {request.quantity}
+          </p>
         </div>
-        {request.returnReason && (
-          <div className="ops-inline-note returned">
-            <RotateCcw size={15} />
-            บัญชีส่งกลับ: {request.returnReason}
-          </div>
-        )}
-        {awaitingApproval ? (
-          <>
-            <div className="request-price-proposal">
-              <span>ราคาที่เสนอ</span>
-              <strong>
-                {request.proposedPrice === null
-                  ? "ไม่ได้ระบุ"
-                  : `฿ ${money(request.proposedPrice)} / หน่วย`}
-              </strong>
+        <span className={`request-status ${request.status.toLowerCase()}`}>
+          {requestStatusLabel[request.status]}
+        </span>
+      </header>
+
+      {request.returnReason && (
+        <div className="ops-inline-note returned price-detail-returned">
+          <RotateCcw size={15} />
+          บัญชีส่งกลับ: {request.returnReason}
+        </div>
+      )}
+
+      <div className="price-detail-layout">
+        <main className="price-detail-main">
+          <section className="price-detail-context" aria-label="ข้อมูลรายการ">
+            <dl>
+              <div>
+                <dt>ผู้รับ</dt>
+                <dd>{partyName(registry.parties, request.receiverId)}</dd>
+              </div>
+              <div>
+                <dt>ผู้ส่ง</dt>
+                <dd>{partyName(registry.parties, request.senderId)}</dd>
+              </div>
+              <div>
+                <dt>การชำระเงิน</dt>
+                <dd>{PAYMENT_LABELS[request.payment]}</dd>
+              </div>
+              <div>
+                <dt>พื้นที่ปลายทาง</dt>
+                <dd>
+                  {receiver?.district || branchLabel(request.branch)}
+                  {receiver?.province ? ` · ${receiver.province}` : ""}
+                </dd>
+              </div>
+              <div>
+                <dt>วันที่เปิดบิล</dt>
+                <dd>{thaiDate(request.requestedAt)}</dd>
+              </div>
+              <div>
+                <dt>ยอดที่เก็บได้จริง</dt>
+                <dd>
+                  {request.actualCollectedAmount === null
+                    ? "ยังไม่ระบุ"
+                    : `฿ ${money(request.actualCollectedAmount)}`}
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          <section
+            className={`price-recommendation ${recommendation.confidence}`}
+            aria-label="ราคาแนะนำ"
+          >
+            <div className="price-recommendation-title">
+              <div>
+                <span>ราคาแนะนำต่อหน่วย</span>
+                <strong>
+                  {recommendation.price === null
+                    ? "ยังไม่มีราคาแนะนำ"
+                    : `฿ ${money(recommendation.price)}`}
+                </strong>
+              </div>
+              <span className="recommendation-badge">
+                {recommendation.confidenceLabel}
+              </span>
             </div>
+            <p>{recommendation.basis}</p>
+            {recommendation.conflict && (
+              <div className="price-conflict-alert">
+                <AlertTriangle size={17} />
+                {recommendation.conflict}
+              </div>
+            )}
+          </section>
+
+          <section className="price-evidence-section">
+            <header>
+              <div>
+                <h2>หลักฐานที่ใช้แนะนำราคา</h2>
+                <p>{recommendation.sourceLabel}</p>
+              </div>
+              <span>{recommendation.evidence.length} รายการ</span>
+            </header>
+            {recommendation.evidence.length ? (
+              <div className="price-evidence-list">
+                {recommendation.evidence.map((evidence) => (
+                  <div className="price-evidence-row" key={evidence.id}>
+                    <span className="price-evidence-icon">
+                      <PriceEvidenceIcon kind={evidence.kind} />
+                    </span>
+                    <div>
+                      <strong>{evidence.label}</strong>
+                      <small>{evidence.detail}</small>
+                    </div>
+                    <strong className="price-evidence-value">
+                      ฿ {money(evidence.price)}
+                    </strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="price-evidence-empty">
+                ยังไม่มีประวัติราคาที่ตรงกับเงื่อนไขของรายการนี้
+              </div>
+            )}
+          </section>
+        </main>
+
+        <aside className="price-resolution-panel">
+          <header>
+            <h2>{awaitingApproval ? "ผลการตรวจของบัญชี" : "ข้อมูลราคา"}</h2>
+            <p>
+              {awaitingApproval
+                ? "ตรวจราคาและเลือกว่าจะนำไปใช้ในระดับใด"
+                : "บันทึกราคาที่ปลายทางตรวจสอบแล้วเพื่อส่งให้บัญชียืนยัน"}
+            </p>
+          </header>
+          <form
+            className="ops-form price-resolution-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSave(
+                proposedPrice === "" ? null : Number(proposedPrice),
+                approvedPrice === "" ? null : Number(approvedPrice),
+                actualCollectedAmount === ""
+                  ? null
+                  : Number(actualCollectedAmount),
+                decision,
+                reason,
+              );
+            }}
+          >
+            {awaitingApproval ? (
+              <>
+                <div className="request-price-proposal">
+                  <span>ราคาที่เสนอ</span>
+                  <strong>
+                    {request.proposedPrice === null
+                      ? "ไม่ได้ระบุ"
+                      : `฿ ${money(request.proposedPrice)} / หน่วย`}
+                  </strong>
+                </div>
+                <Field
+                  label="ราคาที่อนุมัติ / หน่วย"
+                  required={decision !== "RETURN"}
+                >
+                  <input
+                    autoFocus
+                    required={decision !== "RETURN"}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={approvedPrice}
+                    onChange={(event) => setApprovedPrice(event.target.value)}
+                  />
+                </Field>
+              </>
+            ) : (
+              <Field label="ราคาที่ปลายทางเสนอ / หน่วย (ไม่บังคับ)">
+                <input
+                  autoFocus
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={proposedPrice}
+                  onChange={(event) => setProposedPrice(event.target.value)}
+                />
+              </Field>
+            )}
+            {request.payment === "CASH_DESTINATION" && (
+              <Field label="ยอดเงินที่เก็บได้จริง (ทั้งรายการ)">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={actualCollectedAmount}
+                  onChange={(event) =>
+                    setActualCollectedAmount(event.target.value)
+                  }
+                />
+              </Field>
+            )}
+            {awaitingApproval ? (
+              <fieldset className="price-decisions">
+                <legend>ผลการตรวจของบัญชี</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="decision"
+                    checked={decision === "STANDARD"}
+                    onChange={() => setDecision("STANDARD")}
+                  />
+                  <span>
+                    <strong>ยืนยันและใช้เป็นราคามาตรฐาน</strong>
+                    <small>บิลครั้งต่อไปจะขึ้นราคานี้อัตโนมัติ</small>
+                  </span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="decision"
+                    checked={decision === "BILL_ONLY"}
+                    onChange={() => setDecision("BILL_ONLY")}
+                  />
+                  <span>
+                    <strong>ยืนยันใช้เฉพาะบิลนี้</strong>
+                    <small>ไม่เปลี่ยนราคามาตรฐาน</small>
+                  </span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="decision"
+                    checked={decision === "RETURN"}
+                    onChange={() => setDecision("RETURN")}
+                  />
+                  <span>
+                    <strong>ส่งกลับให้ปลายทางแก้ไข</strong>
+                    <small>บิลยังคงสถานะรอราคา</small>
+                  </span>
+                </label>
+              </fieldset>
+            ) : (
+              <div className="ops-inline-note">
+                ราคานี้จะถูกส่งให้บัญชียืนยันก่อนนำไปคำนวณยอดบิล
+              </div>
+            )}
             <Field
-              label="ราคาที่อนุมัติ / หน่วย"
-              required={decision !== "RETURN"}
+              label={
+                decision === "RETURN"
+                  ? "เหตุผลที่ส่งกลับ"
+                  : "หมายเหตุ (ไม่บังคับ)"
+              }
+              required={decision === "RETURN"}
             >
-              <input
-                autoFocus
-                required={decision !== "RETURN"}
-                type="number"
-                min="0"
-                step="0.01"
-                value={approvedPrice}
-                onChange={(event) => setApprovedPrice(event.target.value)}
+              <textarea
+                required={decision === "RETURN"}
+                rows={3}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
               />
             </Field>
-          </>
-        ) : (
-          <Field label="ราคาที่เสนอ / หน่วย (ไม่บังคับ)">
-            <input
-              autoFocus
-              type="number"
-              min="0"
-              step="0.01"
-              value={proposedPrice}
-              onChange={(event) => setProposedPrice(event.target.value)}
-            />
-          </Field>
-        )}
-        {request.payment === "CASH_DESTINATION" && (
-          <Field label="ยอดเงินที่เก็บได้จริง (ทั้งรายการ)">
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={actualCollectedAmount}
-              onChange={(event) => setActualCollectedAmount(event.target.value)}
-            />
-          </Field>
-        )}
-        {awaitingApproval ? (
-          <fieldset className="price-decisions">
-            <legend>ผลการตรวจของบัญชี</legend>
-            <label>
-              <input
-                type="radio"
-                name="decision"
-                checked={decision === "STANDARD"}
-                onChange={() => setDecision("STANDARD")}
-              />
-              <span>
-                <strong>ยืนยันและใช้เป็นราคามาตรฐาน</strong>
-                <small>บิลครั้งต่อไปจะขึ้นราคานี้อัตโนมัติ</small>
-              </span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="decision"
-                checked={decision === "BILL_ONLY"}
-                onChange={() => setDecision("BILL_ONLY")}
-              />
-              <span>
-                <strong>ยืนยันใช้เฉพาะบิลนี้</strong>
-                <small>ไม่เปลี่ยนราคามาตรฐาน</small>
-              </span>
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="decision"
-                checked={decision === "RETURN"}
-                onChange={() => setDecision("RETURN")}
-              />
-              <span>
-                <strong>ส่งกลับให้ปลายทางแก้ไข</strong>
-                <small>บิลยังคงสถานะรอราคา</small>
-              </span>
-            </label>
-          </fieldset>
-        ) : (
-          <div className="ops-inline-note">
-            ราคานี้จะถูกส่งให้บัญชียืนยันก่อนนำไปคำนวณยอดบิล
-          </div>
-        )}
-        <Field
-          label={
-            decision === "RETURN" ? "เหตุผลที่ส่งกลับ" : "หมายเหตุ (ไม่บังคับ)"
-          }
-          required={decision === "RETURN"}
-        >
-          <textarea
-            required={decision === "RETURN"}
-            rows={3}
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </Field>
-        <div className="ops-form-actions">
-          <Button type="button" onClick={onClose}>
-            ยกเลิก
-          </Button>
-          <Button type="submit" className="primary">
-            <CheckCircle2 size={16} />
-            {decision === "SUBMIT"
-              ? proposedPrice === ""
-                ? "ส่งให้ผู้จัดการกำหนดราคา"
-                : "ส่งให้บัญชียืนยัน"
-              : decision === "RETURN"
-                ? "ส่งกลับแก้ไข"
-                : "ยืนยันราคา"}
-          </Button>
-        </div>
-      </form>
-    </Modal>
+            <div className="ops-form-actions">
+              <Button type="button" onClick={onBack}>
+                กลับไปตาราง
+              </Button>
+              <Button type="submit" className="primary">
+                <CheckCircle2 size={16} />
+                {decision === "SUBMIT"
+                  ? proposedPrice === ""
+                    ? "ส่งให้ผู้จัดการกำหนดราคา"
+                    : "ส่งให้บัญชียืนยัน"
+                  : decision === "RETURN"
+                    ? "ส่งกลับแก้ไข"
+                    : "ยืนยันราคา"}
+              </Button>
+            </div>
+          </form>
+        </aside>
+      </div>
+    </div>
   );
 }
 

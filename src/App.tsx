@@ -21,6 +21,7 @@ import {
   LayoutDashboard,
   PackageCheck,
   ClipboardCheck,
+  HandCoins,
 } from "lucide-react";
 import { supabase, getProfile } from "./api";
 import { createService } from "./service";
@@ -48,6 +49,7 @@ import LoadingWork from "./LoadingWork";
 import DestinationDashboard from "./DestinationDashboard";
 import { destinationBranches } from "./branchRoutes";
 import DeliveryWork from "./DeliveryWork";
+import CashCollection from "./CashCollection";
 
 const demoProfile: Profile = {
   id: "demo",
@@ -300,6 +302,9 @@ export default function App() {
           { id: "delivery", label: "งานส่งสินค้า", Icon: ClipboardCheck },
         ]
       : []),
+    ...(canOpen("finance")
+      ? [{ id: "cod", label: "เก็บเงินสดปลายทาง", Icon: HandCoins }]
+      : []),
     ...(canOpen("master_data")
       ? [
           {
@@ -313,7 +318,7 @@ export default function App() {
       ? [{ id: "pricing", label: "ราคาและคำขอราคา", Icon: Tags }]
       : []),
     ...(canOpen("finance")
-      ? [{ id: "finance", label: "รับชำระและยอดค้าง", Icon: Wallet }]
+      ? [{ id: "finance", label: "ยอดค้างชำระทั้งหมด", Icon: Wallet }]
       : []),
     ...(manager && canOpen("settings")
       ? [{ id: "settings", label: "ตั้งค่าบริษัท", Icon: SettingsIcon }]
@@ -471,6 +476,8 @@ export default function App() {
               <MasterData />
             ) : page === "pricing" ? (
               <Pricing />
+            ) : page === "cod" ? (
+              <CashCollection />
             ) : page === "finance" ? (
               <Shipments key="finance" finance />
             ) : manager ? (

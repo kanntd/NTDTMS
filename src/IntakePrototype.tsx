@@ -44,9 +44,7 @@ import {
 import {
   issueRemoteReceptionBill,
   loadRemoteWorkspace,
-  syncRemoteWorkspace,
 } from "./remoteWorkspace";
-import type { IntakeRegistrySnapshot } from "./intakeRegistry";
 
 type Choice = { id: string; label: string; detail?: string };
 type Line = Measurements & {
@@ -390,14 +388,12 @@ export default function IntakePrototype() {
   const [fractionalWarning, setFractionalWarning] = useState(false);
   const [error, setError] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
-  const applyingRemoteRef = useRef(false);
   useEffect(() => {
     if (w.demo) return;
     let active = true;
     loadRemoteWorkspace()
       .then((workspace) => {
         if (!active) return;
-        applyingRemoteRef.current = true;
         setState((current) => ({
           ...current,
           parties: workspace.registry.parties,
@@ -432,35 +428,6 @@ export default function IntakePrototype() {
     if (!w.demo) return;
     saveOperations(operations);
   }, [operations, w.demo]);
-  useEffect(() => {
-    if (w.demo || !remoteReady) return;
-    if (applyingRemoteRef.current) {
-      applyingRemoteRef.current = false;
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      const registry: IntakeRegistrySnapshot = {
-        raw: { catalogActive: state.catalogActive || {} },
-        parties: state.parties,
-        catalog: state.catalog,
-        defaults: state.defaults,
-        partyRoles: state.partyRoles || {},
-      };
-      void syncRemoteWorkspace(registry, operations).catch((cause) =>
-        setError(`บันทึกข้อมูลกลางไม่สำเร็จ: ${(cause as Error).message}`),
-      );
-    }, 400);
-    return () => window.clearTimeout(timer);
-  }, [
-    w.demo,
-    remoteReady,
-    state.parties,
-    state.catalog,
-    state.defaults,
-    state.partyRoles,
-    state.catalogActive,
-    operations,
-  ]);
   useEffect(() => {
     setState((current) => ({
       ...current,
@@ -852,47 +819,59 @@ export default function IntakePrototype() {
     if (issue && !w.demo) {
       setBusy(true);
       try {
-        const registry: IntakeRegistrySnapshot = {
-          raw: { catalogActive: state.catalogActive || {} },
-          parties: state.parties,
-          catalog: state.catalog,
-          defaults: state.defaults,
-          partyRoles: state.partyRoles || {},
-        };
-        await syncRemoteWorkspace(registry, operations);
-        const issued = await issueRemoteReceptionBill({
-          id: bill.id,
-          sender_id: sender.id,
-          receiver_id: receiver.id,
-          destination_branch_code: f.branch,
-          payment_mode: payment,
-          credit_days: f.days,
-          billing_cycle: f.billingCycle,
-          billing_period_end: bill.billingPeriod?.end,
-          discount: f.discount,
-          discount_reason: f.reason,
-          withholding_amount: withheld,
-          rounding: amount.rounding,
-          collect_now: payment === "CASH_ORIGIN",
-          payment_method: f.paymentMethod,
-          payment_reference:
-            f.paymentMethod === "TRANSFER" ? f.paymentReference.trim() : "",
-          note: f.note,
-          opened_by_employee_id: opener.id,
-          items: bill.items.map((item) => ({
-            id: item.id,
-            catalog_id: item.catalogId,
-            name: item.name,
-            unit: item.unit,
-            quantity: item.quantity,
-            price: item.price,
-            request_price: item.requestPrice,
-            weight: item.weight,
-            width: item.width,
-            length: item.length,
-            height: item.height,
-          })),
-        });
+        const billCatalog = bill.items.map((item) =>
+          state.catalog.find((catalog) => catalog.id === item.catalogId),
+        );
+        if (billCatalog.some((item) => !item)) {
+          throw new Error("ไม่พบข้อมูลสินค้าที่เลือก กรุณาเลือกสินค้าใหม่");
+        }
+        const issued = await issueRemoteReceptionBill(
+          {
+            id: bill.id,
+            sender_id: sender.id,
+            receiver_id: receiver.id,
+            destination_branch_code: f.branch,
+            payment_mode: payment,
+            credit_days: f.days,
+            billing_cycle: f.billingCycle,
+            billing_period_end: bill.billingPeriod?.end,
+            discount: f.discount,
+            discount_reason: f.reason,
+            withholding_amount: withheld,
+            rounding: amount.rounding,
+            collect_now: payment === "CASH_ORIGIN",
+            payment_method: f.paymentMethod,
+            payment_reference:
+              f.paymentMethod === "TRANSFER" ? f.paymentReference.trim() : "",
+            note: f.note,
+            opened_by_employee_id: opener.id,
+            items: bill.items.map((item) => ({
+              id: item.id,
+              catalog_id: item.catalogId,
+              name: item.name,
+              unit: item.unit,
+              quantity: item.quantity,
+              price: item.price,
+              request_price: item.requestPrice,
+              weight: item.weight,
+              width: item.width,
+              length: item.length,
+              height: item.height,
+            })),
+          },
+          {
+            receiver: {
+              ...receiver,
+              branch_code:
+                state.defaults[receiver.id] || receiver.branch_code || f.branch,
+            },
+            sender: {
+              ...sender,
+              branch_code: sender.branch_code || "",
+            },
+            catalog: billCatalog as CatalogItem[],
+          },
+        );
         bill.id = issued.id;
         bill.number = issued.number;
         setState((current) => ({
@@ -901,7 +880,6 @@ export default function IntakePrototype() {
           drafts: blank(loginOpener.id),
         }));
         const workspace = await loadRemoteWorkspace();
-        applyingRemoteRef.current = true;
         setOperations(workspace.operations);
         setState((current) => ({
           ...current,
@@ -1767,10 +1745,7 @@ function BillPreview({
         </p>
         <p>
           กรุงเทพฯ →{" "}
-          {
-            branchOptions.find((branch) => branch.code === b.draft.branch)
-              ?.name
-          }
+          {branchOptions.find((branch) => branch.code === b.draft.branch)?.name}
         </p>
         <div className="desk-paper-parties">
           <section>

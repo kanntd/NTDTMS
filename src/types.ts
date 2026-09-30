@@ -250,9 +250,20 @@ export interface CashCollectionRecord {
   amount: number;
   collectedAt: string;
 }
+export interface CodPaymentRecord {
+  shipmentId: string;
+  amount: number;
+  receivedAt: string;
+}
 export interface DeliveryInput {
   shipmentId: string;
-  result: "DELIVERED" | "CUSTOMER_ABSENT" | "REFUSED" | "DAMAGED" | "RESCHEDULED" | "OTHER";
+  result:
+    | "DELIVERED"
+    | "CUSTOMER_ABSENT"
+    | "REFUSED"
+    | "DAMAGED"
+    | "RESCHEDULED"
+    | "OTHER";
   collectedAmount: number;
   note: string;
   roundReference: string;
@@ -285,11 +296,7 @@ export interface LoadTripUpdate {
   allocations?: Array<{ lineId: string; quantity: number }>;
 }
 export type LoadTripCommand =
-  | "CLOSE"
-  | "DEPART"
-  | "RECEIVE"
-  | "REOPEN"
-  | "CANCEL";
+  "CLOSE" | "DEPART" | "RECEIVE" | "REOPEN" | "CANCEL";
 export interface LoadTripItemChange {
   shipmentId: string;
   itemId: string;
