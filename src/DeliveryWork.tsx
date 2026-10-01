@@ -11,7 +11,7 @@ import {
   Truck,
   X,
 } from "lucide-react";
-import { billNumberPrefix } from "./billNumber";
+import { billNumberPrefix, compareBillsByOpenedAt } from "./billNumber";
 import {
   destinationBranchAliases,
   destinationBranches,
@@ -21,7 +21,7 @@ import { useWorkspace } from "./context";
 import { calendarAgeInBangkok } from "./dashboardQueue";
 import { number, thaiDate } from "./domain";
 import { completeBillNumber, LOADING_PAYMENT_MODES } from "./loadingQueue";
-import { Button, Empty, Loading, Modal } from "./ui";
+import { Button, Empty, Loading, Modal, SearchableSelect } from "./ui";
 import {
   PAYMENT_LABELS,
   type LoadTripAllocation,
@@ -63,17 +63,6 @@ const unique = (values: string[]) =>
   [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "th"));
 const quantity = (bill: Bill) =>
   bill.items.reduce((sum, item) => sum + item.remaining, 0);
-
-function compareBillDate(left: Bill, right: Bill, newestFirst: boolean) {
-  const leftTime = Date.parse(left.receivedAt) || 0;
-  const rightTime = Date.parse(right.receivedAt) || 0;
-  const dateDifference = leftTime - rightTime;
-  const billDifference = left.shipmentNo.localeCompare(right.shipmentNo, "en", {
-    numeric: true,
-  });
-  const difference = dateDifference || billDifference;
-  return newestFirst ? -difference : difference;
-}
 
 export default function DeliveryWork() {
   const w = useWorkspace();
@@ -312,7 +301,13 @@ export default function DeliveryWork() {
         if (group === "SENDER" || sort === "SENDER")
           return a.senderName.localeCompare(b.senderName, "th");
         if (sort === "QUANTITY") return quantity(b) - quantity(a);
-        return compareBillDate(a, b, sort === "NEWEST");
+        return compareBillsByOpenedAt(
+          a.openedAt,
+          a.shipmentNo,
+          b.openedAt,
+          b.shipmentNo,
+          sort === "NEWEST",
+        );
       });
   }, [
     bills,
@@ -538,16 +533,14 @@ export default function DeliveryWork() {
               </option>
             ))}
           </select>
-          <select
-            aria-label="กรองสินค้า"
+          <SearchableSelect
+            className="loading-searchable-filter"
+            ariaLabel="กรองสินค้า"
             value={product}
-            onChange={(event) => setProduct(event.target.value)}
-          >
-            <option value="">สินค้าทั้งหมด</option>
-            {products.map((name) => (
-              <option key={name}>{name}</option>
-            ))}
-          </select>
+            emptyLabel="สินค้าทั้งหมด"
+            options={products.map((name) => ({ id: name, label: name }))}
+            onChange={setProduct}
+          />
           <select
             aria-label="กรองหน่วยนับ"
             value={unit}
@@ -629,8 +622,8 @@ export default function DeliveryWork() {
               value={sort}
               onChange={(event) => setSort(event.target.value as Sort)}
             >
-              <option value="OLDEST">เก่าสุดก่อน</option>
-              <option value="NEWEST">ใหม่สุดก่อน</option>
+              <option value="OLDEST">วันที่เปิดบิลเก่าสุดก่อน</option>
+              <option value="NEWEST">วันที่เปิดบิลใหม่สุดก่อน</option>
               <option value="RECEIVER">ผู้รับ ก-ฮ</option>
               <option value="SENDER">ผู้ส่ง ก-ฮ</option>
               <option value="QUANTITY">จำนวนมากก่อน</option>

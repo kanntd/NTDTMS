@@ -40,7 +40,15 @@ import { localDate, money, thaiDate, thaiTime } from "./domain";
 import DateInput from "./DateInput";
 import { intakeAmounts, onePercent } from "./intakeMath";
 import { PAYMENT_LABELS, type PaymentMode } from "./types";
-import { Button, Empty, Field, IconButton, Loading, Modal } from "./ui";
+import {
+  Button,
+  Empty,
+  Field,
+  IconButton,
+  Loading,
+  Modal,
+  SearchableSelect,
+} from "./ui";
 import {
   loadRemoteWorkspace,
   resolveRemotePriceRequest,
@@ -1020,13 +1028,16 @@ function PriceFilterBar({
           options={senderOptions}
           onChange={(senderId) => patch({ senderId, catalogId: "" })}
         />
-        <FilterSelect
-          label="สินค้า / หน่วย"
-          value={filters.catalogId}
-          emptyLabel="สินค้าทั้งหมด"
-          options={productOptions}
-          onChange={(catalogId) => patch({ catalogId })}
-        />
+        <div className="pricing-filter-control">
+          <span>สินค้า / หน่วย</span>
+          <SearchableSelect
+            ariaLabel="สินค้า / หน่วย"
+            value={filters.catalogId}
+            emptyLabel="สินค้าทั้งหมด"
+            options={productOptions}
+            onChange={(catalogId) => patch({ catalogId })}
+          />
+        </div>
         <FilterSelect
           label="ประเภทการชำระเงิน"
           value={filters.payment}

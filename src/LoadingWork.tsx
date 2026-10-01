@@ -30,7 +30,7 @@ import {
   destinationCodeForDistrict,
   isDestinationBranch,
 } from "./branchRoutes";
-import { billNumberPrefix } from "./billNumber";
+import { billNumberPrefix, compareBillsByOpenedAt } from "./billNumber";
 import LoadTripManager from "./LoadTripManager";
 import { currentDriver, loadOperations } from "./operationsStore";
 import { loadRemoteWorkspace } from "./remoteWorkspace";
@@ -42,7 +42,7 @@ import {
   summarizeLoadingDashboard,
   type LoadingGroupMode,
 } from "./loadingQueue";
-import { Button, Empty, Field, Loading, Modal } from "./ui";
+import { Button, Empty, Field, Loading, Modal, SearchableSelect } from "./ui";
 import {
   PAYMENT_LABELS,
   type LoadingQueueRecord,
@@ -93,23 +93,6 @@ function sortedUnique(values: string[]) {
   return [...new Set(values.filter(Boolean))].sort((a, b) =>
     a.localeCompare(b, "th"),
   );
-}
-
-function compareBillDate(
-  leftDate: string,
-  leftBill: string,
-  rightDate: string,
-  rightBill: string,
-  newestFirst: boolean,
-) {
-  const leftTime = Date.parse(leftDate) || 0;
-  const rightTime = Date.parse(rightDate) || 0;
-  const dateDifference = leftTime - rightTime;
-  const billDifference = leftBill.localeCompare(rightBill, "en", {
-    numeric: true,
-  });
-  const difference = dateDifference || billDifference;
-  return newestFirst ? -difference : difference;
 }
 
 export default function LoadingWork({
@@ -342,7 +325,7 @@ export default function LoadingWork({
           );
         if (sort === "QUANTITY_DESC")
           return b.total_quantity - a.total_quantity;
-        return compareBillDate(
+        return compareBillsByOpenedAt(
           a.received_at,
           a.shipment_no,
           b.received_at,
@@ -885,16 +868,14 @@ export default function LoadingWork({
                   </option>
                 ))}
               </select>
-              <select
-                aria-label="กรองสินค้า"
+              <SearchableSelect
+                className="loading-searchable-filter"
+                ariaLabel="กรองสินค้า"
                 value={product}
-                onChange={(event) => setProduct(event.target.value)}
-              >
-                <option value="">สินค้าทั้งหมด</option>
-                {products.map((name) => (
-                  <option key={name}>{name}</option>
-                ))}
-              </select>
+                emptyLabel="สินค้าทั้งหมด"
+                options={products.map((name) => ({ id: name, label: name }))}
+                onChange={setProduct}
+              />
               <select
                 aria-label="กรองหน่วยนับ"
                 value={unit}
@@ -973,8 +954,8 @@ export default function LoadingWork({
                   value={sort}
                   onChange={(event) => setSort(event.target.value as SortMode)}
                 >
-                  <option value="OLDEST">เก่าสุดก่อน</option>
-                  <option value="NEWEST">ใหม่สุดก่อน</option>
+                  <option value="OLDEST">วันที่เปิดบิลเก่าสุดก่อน</option>
+                  <option value="NEWEST">วันที่เปิดบิลใหม่สุดก่อน</option>
                   <option value="RECEIVER">ผู้รับ ก-ฮ</option>
                   <option value="SENDER">ผู้ส่ง ก-ฮ</option>
                   <option value="QUANTITY_DESC">จำนวนมากก่อน</option>

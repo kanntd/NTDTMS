@@ -55,6 +55,7 @@ describe("destination dashboard", () => {
     expect(company.overdue5).toEqual({ billCount: 1, quantity: 200 });
     expect(branch.overdue5).toEqual({ billCount: 0, quantity: 0 });
     expect(branch.waiting).toEqual({ billCount: 1, quantity: 200 });
+    expect(branch.carriedOver).toEqual({ billCount: 1, quantity: 200 });
   });
 
   it("only includes the selected branch and keeps incoming trips separate", () => {
@@ -81,5 +82,70 @@ describe("destination dashboard", () => {
     );
     expect(summary.waiting).toEqual({ billCount: 1, quantity: 120 });
     expect(summary.cashDestination.amount).toBe(1_200);
+  });
+
+  it("keeps carried-over bills separate from bills received today", () => {
+    const summary = summarizeDestinationDashboard(
+      [
+        trip(),
+        trip({
+          id: "today",
+          receivedAt: "2026-09-19T03:00:00Z",
+          allocations: [
+            {
+              ...trip().allocations[0],
+              id: "line-2",
+              shipmentId: "bill-2",
+              shipmentNo: "B0126000002",
+              itemId: "item-2",
+              quantity: 7,
+              originalQuantity: 7,
+            },
+          ],
+        }),
+      ],
+      "KPT",
+      "OPENED",
+      "2026-09-19T03:00:00Z",
+    );
+
+    expect(summary.waiting).toEqual({ billCount: 2, quantity: 207 });
+    expect(summary.carriedOver).toEqual({ billCount: 1, quantity: 200 });
+    expect(summary.receivedToday).toEqual({ billCount: 1, quantity: 7 });
+  });
+
+  it("does not include another branch in today's delivered totals", () => {
+    const summary = summarizeDestinationDashboard(
+      [
+        trip(),
+        trip({
+          id: "other",
+          destinationBranchCode: "PLK",
+          allocations: [
+            {
+              ...trip().allocations[0],
+              id: "other-line",
+              shipmentId: "other-bill",
+              itemId: "other-item",
+              quantity: 325,
+            },
+          ],
+        }),
+      ],
+      "KPT",
+      "BRANCH_RECEIVED",
+      "2026-09-19T03:00:00Z",
+      [
+        {
+          shipmentId: "other-bill",
+          itemId: "other-item",
+          quantity: 325,
+          deliveredAt: "2026-09-19T03:00:00Z",
+        },
+      ],
+    );
+
+    expect(summary.deliveredToday).toEqual({ billCount: 0, quantity: 0 });
+    expect(summary.waiting).toEqual({ billCount: 1, quantity: 200 });
   });
 });

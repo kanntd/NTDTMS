@@ -10,9 +10,108 @@ import {
   X,
   LoaderCircle,
   PackageOpen,
+  Search,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
+
+export type SearchableSelectOption = {
+  id: string;
+  label: string;
+  detail?: string;
+};
+
+export function SearchableSelect({
+  value,
+  options,
+  emptyLabel,
+  ariaLabel,
+  onChange,
+  className = "",
+}: {
+  value: string;
+  options: SearchableSelectOption[];
+  emptyLabel: string;
+  ariaLabel: string;
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const selected = options.find((option) => option.id === value);
+  const normalized = query.trim().toLocaleLowerCase("th");
+  const visible = options.filter((option) =>
+    `${option.label} ${option.detail || ""}`
+      .toLocaleLowerCase("th")
+      .includes(normalized),
+  );
+
+  function choose(next: string) {
+    onChange(next);
+    setQuery("");
+    setOpen(false);
+  }
+
+  return (
+    <div
+      className={`searchable-select ${className}`}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        className="searchable-select-trigger"
+        aria-label={ariaLabel}
+        aria-expanded={open}
+        aria-controls={`${id}-options`}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span>{selected?.label || emptyLabel}</span>
+        <ChevronDown size={15} />
+      </button>
+      {open && (
+        <div className="searchable-select-menu" id={`${id}-options`}>
+          <label>
+            <Search size={14} />
+            <input
+              autoFocus
+              aria-label={`ค้นหา${ariaLabel}`}
+              value={query}
+              placeholder={`ค้นหา${ariaLabel}`}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setOpen(false);
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => choose("")}
+          >
+            {emptyLabel}
+          </button>
+          {visible.map((option) => (
+            <button
+              type="button"
+              key={option.id}
+              className={option.id === value ? "selected" : ""}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => choose(option.id)}
+            >
+              <span>{option.label}</span>
+              {option.detail && <small>{option.detail}</small>}
+            </button>
+          ))}
+          {!visible.length && <p>ไม่พบข้อมูล</p>}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Button({
   children,

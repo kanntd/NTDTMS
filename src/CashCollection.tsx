@@ -18,12 +18,12 @@ import {
 import {
   buildCodSummary,
   codCollectionStatus,
-  compareBillNumbers,
   dateKey,
   matchingBills,
   type CodCollectionStatus,
 } from "./codCollection";
 import { billEditAccessMessage, canEditShipment } from "./billEditPolicy";
+import { compareBillsByOpenedAt } from "./billNumber";
 import { useWorkspace } from "./context";
 import DateInput from "./DateInput";
 import { loadIntakeRegistry } from "./intakeRegistry";
@@ -35,7 +35,14 @@ import ShipmentEditModal from "./ShipmentEditModal";
 import type { DataService } from "./service";
 import type { CodPaymentRecord, Shipment, ShipmentDetail } from "./types";
 import { localDate, money, number, thaiDate } from "./domain";
-import { Button, Empty, IconButton, Loading, Pagination } from "./ui";
+import {
+  Button,
+  Empty,
+  IconButton,
+  Loading,
+  Pagination,
+  SearchableSelect,
+} from "./ui";
 
 const PAGE_SIZE = 30;
 const LOAD_PAGE_SIZE = 500;
@@ -307,10 +314,15 @@ export default function CashCollection() {
           (priceState === "PENDING" ? row.price_pending : !row.price_pending),
       )
       .filter((row) => !vehicle || row.vehicle_plate_no === vehicle)
-      .sort((a, b) => {
-        const order = compareBillNumbers(a.shipment_no, b.shipment_no);
-        return sort === "OLDEST" ? order : -order;
-      });
+      .sort((a, b) =>
+        compareBillsByOpenedAt(
+          a.received_at,
+          a.shipment_no,
+          b.received_at,
+          b.shipment_no,
+          sort === "NEWEST",
+        ),
+      );
   }, [
     branch,
     catalogId,
@@ -717,23 +729,19 @@ export default function CashCollection() {
                 ))}
               </select>
             </label>
-            <label className="shipment-filter-control">
+            <div className="shipment-filter-control">
               <span>สินค้า / หน่วย</span>
-              <select
+              <SearchableSelect
+                ariaLabel="สินค้า / หน่วย"
                 value={catalogId}
-                onChange={(event) => {
-                  setCatalogId(event.target.value);
+                emptyLabel="สินค้าทั้งหมด"
+                options={productOptions.map(([id, label]) => ({ id, label }))}
+                onChange={(value) => {
+                  setCatalogId(value);
                   setPage(0);
                 }}
-              >
-                <option value="">สินค้าทั้งหมด</option>
-                {productOptions.map(([id, label]) => (
-                  <option key={id} value={id}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
+              />
+            </div>
             <label className="shipment-filter-control">
               <span>หน่วยนับ</span>
               <select
@@ -814,7 +822,7 @@ export default function CashCollection() {
               </select>
             </label>
             <label className="shipment-filter-control">
-              <span>เรียงตามเลขที่บิล</span>
+              <span>เรียงตามวันที่เปิดบิล</span>
               <div className="cod-sort-select">
                 <ArrowUpDown size={16} />
                 <select
@@ -824,8 +832,8 @@ export default function CashCollection() {
                     setPage(0);
                   }}
                 >
-                  <option value="OLDEST">เก่าไปใหม่</option>
-                  <option value="NEWEST">ใหม่ไปเก่า</option>
+                  <option value="OLDEST">เก่าสุดก่อน</option>
+                  <option value="NEWEST">ใหม่สุดก่อน</option>
                 </select>
               </div>
             </label>

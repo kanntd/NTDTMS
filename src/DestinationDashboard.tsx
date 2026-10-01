@@ -235,8 +235,8 @@ export default function DestinationDashboard() {
               </tr>
               <tr>
                 <th>บิลค้างส่ง</th>
-                <td>{number(summary.overdue.billCount)}</td>
-                <td>{number(summary.overdue.quantity)}</td>
+                <td>{number(summary.carriedOver.billCount)}</td>
+                <td>{number(summary.carriedOver.quantity)}</td>
                 <td><MetricValue metric={summary.overdue4} /></td>
                 <td><MetricValue metric={summary.overdue5} /></td>
                 <td><MetricValue metric={summary.overdueMoreThan5} /></td>

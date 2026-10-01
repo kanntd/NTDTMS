@@ -6,6 +6,22 @@ export function billNumberPrefix(documentCode: string, date = new Date()) {
   return `${documentCode.trim().toUpperCase()}${billYear(date)}`;
 }
 
+export function compareBillsByOpenedAt(
+  leftDate: string,
+  leftBill: string,
+  rightDate: string,
+  rightBill: string,
+  newestFirst = false,
+) {
+  const dateDifference =
+    (Date.parse(leftDate) || 0) - (Date.parse(rightDate) || 0);
+  const billDifference = leftBill.localeCompare(rightBill, "en", {
+    numeric: true,
+  });
+  const difference = dateDifference || billDifference;
+  return newestFirst ? -difference : difference;
+}
+
 export function nextLocalBillNumber(
   documentCode: string,
   existingNumbers: string[],
