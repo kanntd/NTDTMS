@@ -24,7 +24,12 @@ import {
 } from "lucide-react";
 import { useWorkspace } from "./context";
 import { localDate, money, number, thaiDate } from "./domain";
-import { destinationBranches, destinationCodeForDistrict } from "./branchRoutes";
+import {
+  configuredDestinationBranchCode,
+  destinationBranches,
+  destinationCodeForDistrict,
+  isDestinationBranch,
+} from "./branchRoutes";
 import { billNumberPrefix } from "./billNumber";
 import LoadTripManager from "./LoadTripManager";
 import { currentDriver, loadOperations } from "./operationsStore";
@@ -54,12 +59,12 @@ function branchCode(
   zones: ReturnType<typeof useWorkspace>["zones"],
   branches: ReturnType<typeof useWorkspace>["branches"],
 ) {
-  return (
+  const storedCode =
     row.destination_branch_code ||
     destinationCodeForDistrict(row.district_id, branches) ||
     zones.find((zone) => zone.id === row.zone_id)?.code ||
-    ""
-  );
+    "";
+  return configuredDestinationBranchCode(storedCode, branches, zones);
 }
 
 function districtName(
@@ -230,7 +235,10 @@ export default function LoadingWork({
   );
 
   const branchRows = useMemo(
-    () => rows.filter((row) => !branch || branchCode(row, w.zones, w.branches) === branch),
+    () =>
+      rows.filter(
+        (row) => !branch || branchCode(row, w.zones, w.branches) === branch,
+      ),
     [rows, branch, w.zones, w.branches],
   );
   const districts = useMemo(
@@ -249,6 +257,11 @@ export default function LoadingWork({
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
     [branchRows],
   );
+  useEffect(() => {
+    if (receiver && !receivers.some(([id]) => id === receiver)) {
+      setReceiver("");
+    }
+  }, [receiver, receivers]);
   const senders = useMemo(
     () =>
       [
@@ -375,7 +388,14 @@ export default function LoadingWork({
     0,
   );
   const draftTrips = trips.filter(
-    (trip) => trip.status === "DRAFT" && trip.destinationBranchCode === branch,
+    (trip) =>
+      trip.status === "DRAFT" &&
+      isDestinationBranch(
+        trip.destinationBranchCode,
+        branch,
+        w.branches,
+        w.zones,
+      ),
   );
   const issuingBranch =
     w.branches.find((row) => row.id === w.profile.branch_id) ||

@@ -135,7 +135,10 @@ export function createService(demo: boolean) {
             (!o.dateTo || received <= o.dateTo) &&
             (!o.zone || s.zone_id === o.zone) &&
             (!o.district || s.district_id === o.district) &&
-            (!o.branch || s.destination_branch_code === o.branch) &&
+            (!(o.branchAliases?.length || o.branch) ||
+              (o.branchAliases?.length
+                ? o.branchAliases.includes(s.destination_branch_code || "")
+                : s.destination_branch_code === o.branch)) &&
             (!o.receiverId ||
               s.receiver_party_id === o.receiverId ||
               s.receiver_snapshot.id === o.receiverId) &&

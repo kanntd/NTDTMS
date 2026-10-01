@@ -29,7 +29,7 @@ import DateInput from "./DateInput";
 import { loadIntakeRegistry } from "./intakeRegistry";
 import { loadOperations } from "./operationsStore";
 import { loadRemoteWorkspace } from "./remoteWorkspace";
-import { destinationBranches } from "./branchRoutes";
+import { destinationBranches, isDestinationBranch } from "./branchRoutes";
 import Receipt from "./Receipt";
 import ShipmentEditModal from "./ShipmentEditModal";
 import type { DataService } from "./service";
@@ -164,14 +164,29 @@ export default function CashCollection() {
     () =>
       [
         ...new Map(
-          rows.map((row) => [
-            receiverKey(row),
-            row.receiver_snapshot.display_name,
-          ]),
+          rows
+            .filter((row) =>
+              isDestinationBranch(
+                row.destination_branch_code,
+                branch,
+                w.branches,
+                w.zones,
+              ),
+            )
+            .map((row) => [
+              receiverKey(row),
+              row.receiver_snapshot.display_name,
+            ]),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [rows],
+    [branch, rows, w.branches, w.zones],
   );
+  useEffect(() => {
+    if (receiver && !receiverOptions.some(([id]) => id === receiver)) {
+      setReceiver("");
+      setPage(0);
+    }
+  }, [receiver, receiverOptions]);
   const senderOptions = useMemo(
     () =>
       [
@@ -277,7 +292,14 @@ export default function CashCollection() {
           row.items?.some((item) => item.product_id === catalogId),
       )
       .filter((row) => !unit || row.items?.some((item) => item.unit === unit))
-      .filter((row) => !branch || row.destination_branch_code === branch)
+      .filter((row) =>
+        isDestinationBranch(
+          row.destination_branch_code,
+          branch,
+          w.branches,
+          w.zones,
+        ),
+      )
       .filter((row) => !district || row.district_id === district)
       .filter(
         (row) =>
@@ -303,6 +325,8 @@ export default function CashCollection() {
     sort,
     unit,
     vehicle,
+    w.branches,
+    w.zones,
   ]);
   const paged = visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const hasFilters = Boolean(
@@ -731,6 +755,7 @@ export default function CashCollection() {
                 value={branch}
                 onChange={(event) => {
                   setBranch(event.target.value);
+                  setReceiver("");
                   setPage(0);
                 }}
               >

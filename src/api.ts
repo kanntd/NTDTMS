@@ -105,6 +105,7 @@ export async function listShipments(
     zone?: string;
     district?: string;
     branch?: string;
+    branchAliases?: string[];
     receiverId?: string;
     senderId?: string;
     catalogId?: string;
@@ -170,7 +171,9 @@ export async function listShipments(
   if (itemShipmentIds.size) q = q.in("id", [...itemShipmentIds]);
   if (options.zone) q = q.eq("zone_id", options.zone);
   if (options.district) q = q.eq("district_id", options.district);
-  if (options.branch) q = q.eq("destination_branch_code", options.branch);
+  if (options.branchAliases?.length)
+    q = q.in("destination_branch_code", options.branchAliases);
+  else if (options.branch) q = q.eq("destination_branch_code", options.branch);
   if (options.receiverId) q = q.eq("receiver_party_id", options.receiverId);
   if (options.senderId) q = q.eq("sender_party_id", options.senderId);
   if (options.payment) q = q.eq("payment_mode", options.payment);
@@ -287,6 +290,7 @@ export async function listShipments(
     count: r.count || 0,
   };
 }
+
 export async function getLoadingQueue(): Promise<LoadingQueueRecord[]> {
   const rows: LoadingQueueRecord[] = [];
   let page = 0;

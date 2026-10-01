@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { destinationBranches } from "./branchRoutes";
+import {
+  configuredDestinationBranchCode,
+  destinationBranchAliases,
+  destinationBranches,
+  isDestinationBranch,
+} from "./branchRoutes";
 import { demoBranches, demoZones } from "./demo";
 
 describe("destinationBranches", () => {
@@ -21,5 +26,18 @@ describe("destinationBranches", () => {
     expect(result.map((branch) => branch.code)).toContain("NEW");
     expect(result.map((branch) => branch.code)).not.toContain("KPT");
     expect(result.map((branch) => branch.code)).not.toContain("BKK");
+  });
+
+  it("keeps old records connected after a branch code is changed", () => {
+    const branches = structuredClone(demoBranches);
+    branches.find((branch) => branch.code === "KPT")!.code = "KP";
+
+    expect(destinationBranchAliases("KP", branches, demoZones)).toEqual(
+      expect.arrayContaining(["KP", "KPT"]),
+    );
+    expect(isDestinationBranch("KPT", "KP", branches, demoZones)).toBe(true);
+    expect(configuredDestinationBranchCode("KPT", branches, demoZones)).toBe(
+      "KP",
+    );
   });
 });

@@ -20,7 +20,11 @@ import {
   thaiDate,
   thaiTime,
 } from "./domain";
-import { destinationBranches } from "./branchRoutes";
+import {
+  destinationBranchAliases,
+  destinationBranches,
+  isDestinationBranch,
+} from "./branchRoutes";
 import { loadIntakeRegistry } from "./intakeRegistry";
 import { loadOperations } from "./operationsStore";
 import { loadRemoteWorkspace } from "./remoteWorkspace";
@@ -95,6 +99,10 @@ export default function ShipmentTracking({
   const [editDetail, setEditDetail] = useState<ShipmentDetail | null>(null);
   const [autoPrint, setAutoPrint] = useState(false);
   const loadedOnce = useRef(false);
+  const selectedBranchAliases = useMemo(
+    () => destinationBranchAliases(filters.branch, w.branches, w.zones),
+    [filters.branch, w.branches, w.zones],
+  );
 
   useEffect(() => {
     setFilters((current) => ({ ...current, query: initialSearch }));
@@ -135,6 +143,7 @@ export default function ShipmentTracking({
           unit: filters.unit,
           payment: filters.payment,
           branch: filters.branch,
+          branchAliases: selectedBranchAliases,
           district: filters.district,
           openedBy: filters.openedBy,
           status: filters.status,
@@ -157,20 +166,37 @@ export default function ShipmentTracking({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [filters, page, w.revision, w.service]);
+  }, [filters, page, selectedBranchAliases, w.revision, w.service]);
 
   const receiverOptions = useMemo(
     () =>
       registry.parties
         .filter((party) => registry.partyRoles[party.id]?.receiver)
+        .filter((party) =>
+          isDestinationBranch(
+            registry.defaults[party.id] || party.branch_code,
+            filters.branch,
+            w.branches,
+            w.zones,
+          ),
+        )
         .map((party) => ({
           id: party.id,
           label: party.display_name,
           detail: party.phone,
         }))
         .sort((a, b) => a.label.localeCompare(b.label, "th")),
-    [registry],
+    [filters.branch, registry, w.branches, w.zones],
   );
+  useEffect(() => {
+    if (
+      filters.receiverId &&
+      !receiverOptions.some((option) => option.id === filters.receiverId)
+    ) {
+      setFilters((current) => ({ ...current, receiverId: "" }));
+      setPage(0);
+    }
+  }, [filters.receiverId, receiverOptions]);
   const senderOptions = useMemo(
     () =>
       registry.parties
@@ -417,7 +443,7 @@ export default function ShipmentTracking({
               id: branch.code,
               label: branch.name,
             }))}
-            onChange={(branch) => patch({ branch })}
+            onChange={(branch) => patch({ branch, receiverId: "" })}
           />
           <FilterSelect
             label="อำเภอ"
@@ -554,9 +580,12 @@ export default function ShipmentTracking({
                         <span className="muted">ยังไม่ขึ้นรถ</span>
                       ) : (
                         <>
-                          <strong>{shipment.vehicle_plate_no || "ไม่ระบุทะเบียน"}</strong>
+                          <strong>
+                            {shipment.vehicle_plate_no || "ไม่ระบุทะเบียน"}
+                          </strong>
                           <small>
-                            ขึ้นรถ: {shipment.loaded_at
+                            ขึ้นรถ:{" "}
+                            {shipment.loaded_at
                               ? thaiDate(shipment.loaded_at)
                               : "ยังไม่มีวันที่"}
                           </small>
@@ -569,12 +598,18 @@ export default function ShipmentTracking({
                       ) : (
                         <>
                           <strong>
-                            สาขารับรถ: {shipment.branch_received_at
+                            สาขารับรถ:{" "}
+                            {shipment.branch_received_at
                               ? thaiDate(shipment.branch_received_at)
                               : "ยังไม่รับรถ"}
                           </strong>
-                          <small className={shipment.delivered_at ? "success-text" : "muted"}>
-                            ส่งสินค้า: {shipment.delivered_at
+                          <small
+                            className={
+                              shipment.delivered_at ? "success-text" : "muted"
+                            }
+                          >
+                            ส่งสินค้า:{" "}
+                            {shipment.delivered_at
                               ? thaiDate(shipment.delivered_at)
                               : "ยังไม่ส่ง"}
                           </small>
@@ -683,12 +718,7 @@ function FilterDate({
   return (
     <label className="shipment-filter-control">
       <span>{label}</span>
-      <DateInput
-        value={value}
-        min={min}
-        max={max}
-        onChange={onChange}
-      />
+      <DateInput value={value} min={min} max={max} onChange={onChange} />
     </label>
   );
 }

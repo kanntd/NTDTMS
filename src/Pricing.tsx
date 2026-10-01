@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { useWorkspace } from "./context";
 import { BRANCH_OPTIONS } from "./intakeData";
-import { destinationBranches } from "./branchRoutes";
+import { destinationBranches, isDestinationBranch } from "./branchRoutes";
 import {
   catalogName,
   INTAKE_STORAGE_KEY,
@@ -510,12 +510,17 @@ export default function Pricing() {
   if (loadingRemote) return <Loading />;
 
   const dimensions = [...operations.agreements, ...operations.priceRequests];
-  const receiverOptions = [...new Set(dimensions.map((row) => row.receiverId))]
+  const branchDimensions = dimensions.filter((row) =>
+    isDestinationBranch(row.branch, filters.branch, w.branches, w.zones),
+  );
+  const receiverOptions = [
+    ...new Set(branchDimensions.map((row) => row.receiverId)),
+  ]
     .map((id) => ({ id, label: partyName(registry.parties, id) }))
     .sort((a, b) => a.label.localeCompare(b.label, "th"));
   const senderOptions = [
     ...new Set(
-      dimensions
+      branchDimensions
         .filter(
           (row) => !filters.receiverId || row.receiverId === filters.receiverId,
         )
@@ -526,7 +531,7 @@ export default function Pricing() {
     .sort((a, b) => a.label.localeCompare(b.label, "th"));
   const productOptions = [
     ...new Set(
-      dimensions
+      branchDimensions
         .filter(
           (row) =>
             (!filters.receiverId || row.receiverId === filters.receiverId) &&
@@ -544,7 +549,8 @@ export default function Pricing() {
     .sort((a, b) => a.localeCompare(b, "th"));
   const normalized = filters.query.trim().toLocaleLowerCase("th");
   const matchesDimensions = (row: PriceDimensions) =>
-    matchesPriceFilters(filters, row);
+    matchesPriceFilters({ ...filters, branch: "" }, row) &&
+    isDestinationBranch(row.branch, filters.branch, w.branches, w.zones);
   const currentRows = operations.agreements
     .filter((row) => row.active && row.currentVersionId)
     .filter(matchesDimensions)
@@ -1041,7 +1047,9 @@ function PriceFilterBar({
             id: row.code,
             label: row.name,
           }))}
-          onChange={(branch) => patch({ branch })}
+          onChange={(branch) =>
+            patch({ branch, receiverId: "", senderId: "", catalogId: "" })
+          }
         />
         {tab === "pending" && (
           <>
