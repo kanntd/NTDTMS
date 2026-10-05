@@ -572,7 +572,7 @@ export async function getLoadTrips(): Promise<LoadTripRecord[]> {
       ? supabase
           .from("shipments")
           .select(
-            "id,shipment_no,received_at,payment_mode,total_amount,total_quantity,receiver_snapshot,sender_snapshot,shipment_status",
+            "id,shipment_no,received_at,district_name,payment_mode,total_amount,total_quantity,receiver_snapshot,sender_snapshot,shipment_status",
           )
           .in("id", shipmentIds)
       : Promise.resolve({ data: [], error: null }),
@@ -670,6 +670,7 @@ export async function getLoadTrips(): Promise<LoadTripRecord[]> {
             unit: String(line.unit_snapshot || item?.unit || ""),
             receiverName: String(receiver?.display_name || ""),
             senderName: String(sender?.display_name || ""),
+            districtName: String(shipment?.district_name || ""),
             openedAt: String(shipment?.received_at || ""),
             paymentMode: String(
               shipment?.payment_mode || "CASH_ORIGIN",

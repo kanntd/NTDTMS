@@ -4,6 +4,7 @@ import {
   Ban,
   Edit3,
   Eye,
+  Printer,
   RefreshCw,
   Search,
   Trash2,
@@ -11,6 +12,12 @@ import {
 } from "lucide-react";
 import { useWorkspace } from "./context";
 import { localDate, money, number, thaiDate } from "./domain";
+import {
+  loadTripAfterCommand,
+  manifestLineProgress,
+  sortManifestLines,
+  summarizeManifestLines,
+} from "./loadManifest";
 import {
   currentDriver,
   type OperationsState,
@@ -22,6 +29,7 @@ import type {
   LoadTripRecord,
   LoadTripStatus,
 } from "./types";
+import { PAYMENT_LABELS } from "./types";
 
 const STATUS_LABELS: Record<LoadTripStatus, string> = {
   DRAFT: "กำลังจัดของ",
@@ -39,6 +47,123 @@ function activeLines(trip: LoadTripRecord) {
 
 function uniqueBillCount(lines: LoadTripAllocation[]) {
   return new Set(lines.map((line) => line.shipmentId)).size;
+}
+
+function LoadManifestSheet({
+  trip,
+  trips,
+  destination,
+  vehicle,
+  driver,
+  releasedAt,
+  preparedBy,
+}: {
+  trip: LoadTripRecord;
+  trips: LoadTripRecord[];
+  destination: string;
+  vehicle: string;
+  driver: string;
+  releasedAt: string;
+  preparedBy: string;
+}) {
+  const lines = sortManifestLines(activeLines(trip));
+  const summary = summarizeManifestLines(lines);
+  return (
+    <article className="load-manifest-sheet">
+      <header>
+        <div>
+          <strong>NTD LOGISTICS</strong>
+          <h2>ใบคลุมรถ</h2>
+        </div>
+        <div>
+          <span>เลขที่ใบคลุม</span>
+          <b>{trip.manifestNo}</b>
+        </div>
+      </header>
+      <section className="load-manifest-meta">
+        <div>
+          <span>วันที่ปล่อยรถ</span>
+          <strong>{thaiDate(releasedAt)}</strong>
+        </div>
+        <div>
+          <span>สาขาปลายทาง</span>
+          <strong>{destination}</strong>
+        </div>
+        <div>
+          <span>ทะเบียนรถ</span>
+          <strong>{vehicle}</strong>
+        </div>
+        <div>
+          <span>พนักงานขับรถ</span>
+          <strong>{driver}</strong>
+        </div>
+      </section>
+      <table className="load-manifest-table">
+        <thead>
+          <tr>
+            <th>เลขที่บิล</th>
+            <th>วันที่บิล</th>
+            <th>ชื่อผู้รับ</th>
+            <th>รายการสินค้า</th>
+            <th className="numeric">จำนวน</th>
+            <th>หน่วยนับ</th>
+            <th>ชื่อผู้ส่ง</th>
+            <th>ประเภทการชำระเงิน</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((line) => {
+            const progress = manifestLineProgress(line, trip, trips);
+            return (
+              <tr key={line.id}>
+                <td>{line.shipmentNo}</td>
+                <td>{line.openedAt ? thaiDate(line.openedAt) : "-"}</td>
+                <td>
+                  <strong>{line.receiverName}</strong>
+                  <small>{line.districtName || "ไม่ระบุอำเภอ"}</small>
+                </td>
+                <td>{line.description}</td>
+                <td className="numeric manifest-quantity">
+                  <strong>{number(line.quantity)}</strong>
+                  {progress.split && (
+                    <small>
+                      เที่ยวนี้ {number(line.quantity)} / ทั้งบิล{" "}
+                      {number(line.originalQuantity)} /{" "}
+                      {progress.completed
+                        ? "ครบแล้ว"
+                        : `คงเหลือ ${number(progress.remaining)}`}
+                    </small>
+                  )}
+                </td>
+                <td>{line.unit}</td>
+                <td>{line.senderName}</td>
+                <td>
+                  {line.paymentMode ? PAYMENT_LABELS[line.paymentMode] : "-"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <footer>
+        <div>
+          <span>จำนวนบิลรวม</span>
+          <strong>{number(summary.billCount)} บิล</strong>
+        </div>
+        <div>
+          <span>จำนวนสินค้ารวม</span>
+          <strong>{number(summary.quantity)} หน่วย</strong>
+          <small>{summary.unitSummary}</small>
+        </div>
+        <div className="manifest-prepared-by">
+          <span>จัดทำโดย</span>
+          <strong>{preparedBy}</strong>
+          <i />
+          <small>ลงชื่อ</small>
+        </div>
+      </footer>
+    </article>
+  );
 }
 
 export default function LoadTripManager({
@@ -60,6 +185,8 @@ export default function LoadTripManager({
   const [dateFrom, setDateFrom] = useState(localDate());
   const [dateTo, setDateTo] = useState(localDate());
   const [selectedTrip, setSelectedTrip] = useState<LoadTripRecord | null>(null);
+  const [printingTrip, setPrintingTrip] = useState<LoadTripRecord | null>(null);
+  const [releasedAt, setReleasedAt] = useState("");
   const [editing, setEditing] = useState(false);
   const [closing, setClosing] = useState(false);
   const [reopening, setReopening] = useState(false);
@@ -72,7 +199,7 @@ export default function LoadTripManager({
   const canWork = canManage || w.profile.role === "clerk";
   const vehicles = operations.vehicles.filter((row) => row.active);
 
-  async function refresh() {
+  async function refresh(): Promise<LoadTripRecord[]> {
     setLoading(true);
     setError("");
     try {
@@ -82,11 +209,13 @@ export default function LoadTripManager({
         const updated = next.find((row) => row.id === selectedTrip.id);
         if (updated) setSelectedTrip(updated);
       }
+      return next;
     } catch (cause) {
       setError((cause as Error).message || "โหลดเที่ยวรถไม่สำเร็จ");
     } finally {
       setLoading(false);
     }
+    return [];
   }
 
   useEffect(() => {
@@ -180,6 +309,13 @@ export default function LoadTripManager({
     );
   }
 
+  function openManifestPrint(trip: LoadTripRecord) {
+    setReleasedAt(
+      trip.departedAt || trip.loadedAt || new Date().toISOString(),
+    );
+    setPrintingTrip(trip);
+  }
+
   async function saveChanges() {
     if (!selectedTrip || selectedTrip.status !== "DRAFT") return;
     const allocations = activeLines(selectedTrip).map((line) => ({
@@ -248,6 +384,24 @@ export default function LoadTripManager({
         note,
         reason,
       });
+      const updatedTrip = loadTripAfterCommand(
+        selectedTrip,
+        action,
+        new Date().toISOString(),
+        {
+          vehicleId: vehicle?.id,
+          vehicleNo: vehicle?.plateNo,
+          driverId: driver?.id,
+          driverName: driver?.nickname || driver?.name,
+          note,
+        },
+      );
+      setTrips((current) =>
+        current.map((trip) =>
+          trip.id === updatedTrip.id ? updatedTrip : trip,
+        ),
+      );
+      setSelectedTrip(updatedTrip);
       w.toast(
         action === "CLOSE"
           ? "ปิดรถแล้ว"
@@ -258,7 +412,9 @@ export default function LoadTripManager({
       setClosing(false);
       setReopening(false);
       onChanged();
-      await refresh();
+      if (action === "CLOSE") {
+        openManifestPrint(updatedTrip);
+      }
     } catch (cause) {
       w.toast(
         (cause as Error).message || "เปลี่ยนสถานะเที่ยวรถไม่สำเร็จ",
@@ -604,6 +760,13 @@ export default function LoadTripManager({
                   </Button>
                 )}
               <span />
+              {["LOADED", "DEPARTED", "RECEIVED"].includes(
+                selectedTrip.status,
+              ) && (
+                <Button onClick={() => openManifestPrint(selectedTrip)}>
+                  <Printer size={17} /> พิมพ์ใบคลุมรถ
+                </Button>
+              )}
               <Button onClick={() => setSelectedTrip(null)}>ปิด</Button>
               {canWork &&
                 selectedTrip.status === "DRAFT" &&
@@ -661,6 +824,32 @@ export default function LoadTripManager({
                 </Button>
               )}
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {printingTrip && (
+        <Modal
+          wide
+          title={`ใบคลุมรถ ${vehicleNo(printingTrip)}`}
+          onClose={() => setPrintingTrip(null)}
+        >
+          <div className="modal-body load-manifest-preview">
+            <div className="load-manifest-actions">
+              <Button onClick={() => setPrintingTrip(null)}>กลับรายละเอียด</Button>
+              <Button className="primary" onClick={() => window.print()}>
+                <Printer size={17} /> พิมพ์ใบคลุมรถ
+              </Button>
+            </div>
+            <LoadManifestSheet
+              trip={printingTrip}
+              trips={trips}
+              destination={branchName(printingTrip)}
+              vehicle={vehicleNo(printingTrip)}
+              driver={driverName(printingTrip)}
+              releasedAt={releasedAt}
+              preparedBy={w.profile.display_name}
+            />
           </div>
         </Modal>
       )}

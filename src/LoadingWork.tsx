@@ -138,6 +138,7 @@ export default function LoadingWork({
   const [busy, setBusy] = useState(false);
   const [operations, setOperations] = useState(loadOperations);
   const loadedOnce = useRef(false);
+  const billEntryRef = useRef<HTMLInputElement>(null);
   const activeVehicles = operations.vehicles.filter(
     (vehicle) => vehicle.active,
   );
@@ -193,8 +194,8 @@ export default function LoadingWork({
   }
 
   useEffect(() => {
-    void refresh();
-  }, [w.revision]);
+    if (workspaceView === "QUEUE") void refresh();
+  }, [w.revision, workspaceView]);
 
   const branches = useMemo(
     () => destinationBranches(w.branches, w.zones),
@@ -472,6 +473,10 @@ export default function LoadingWork({
     const row = rows.find((item) => item.shipment_no === shipmentNo);
     if (!row) {
       w.toast(`ไม่พบบิล ${shipmentNo || billEntry} ในคิวรอขึ้นรถ`, true);
+      window.requestAnimationFrame(() => {
+        billEntryRef.current?.focus({ preventScroll: true });
+        billEntryRef.current?.select();
+      });
       return;
     }
     const destination = branchCode(row, w.zones, w.branches);
@@ -480,18 +485,17 @@ export default function LoadingWork({
         (item) => item.code === destination,
       )?.name;
       w.toast(`บิลนี้ไปสาขา${destinationName || destination}`, true);
+      window.requestAnimationFrame(() => {
+        billEntryRef.current?.focus({ preventScroll: true });
+        billEntryRef.current?.select();
+      });
       return;
     }
     selectRows([row.id], true);
     setBillEntry("");
     w.toast(`เพิ่มบิล ${row.shipment_no} แล้ว`);
-    window.setTimeout(
-      () =>
-        document.getElementById(`loading-row-${row.id}`)?.scrollIntoView({
-          behavior: "smooth",
-          block: "center",
-        }),
-      0,
+    window.requestAnimationFrame(() =>
+      billEntryRef.current?.focus({ preventScroll: true }),
     );
   }
 
@@ -583,7 +587,10 @@ export default function LoadingWork({
         <td>
           <ul className="loading-items">
             {row.items.map((item) => (
-              <li key={item.id}>
+              <li
+                key={item.id}
+                className={item.loaded_quantity ? "partially-loaded" : ""}
+              >
                 <span>{item.description}</span>
                 <b>
                   {number(item.quantity)} {item.unit}
@@ -635,8 +642,7 @@ export default function LoadingWork({
         operations={operations}
         onBack={() => setWorkspaceView("QUEUE")}
         onChanged={() => {
-          w.refresh();
-          void refresh();
+          if (w.demo) w.refresh();
         }}
       />
     );
@@ -808,6 +814,8 @@ export default function LoadingWork({
               >
                 <span>{billPrefix}</span>
                 <input
+                  ref={billEntryRef}
+                  autoFocus
                   aria-label="เลขท้ายบิลหรือเลขจาก QR"
                   placeholder="123 หรือสแกน QR"
                   value={billEntry}

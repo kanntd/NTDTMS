@@ -232,6 +232,7 @@ export interface LoadTripAllocation {
   unit: string;
   receiverName: string;
   senderName: string;
+  districtName?: string;
   openedAt?: string;
   paymentMode?: PaymentMode;
   amount?: number;

@@ -1,5 +1,11 @@
 import * as api from "./api";
-import { createDemoShipment, demoProducts, loadDemo, saveDemo } from "./demo";
+import {
+  createDemoShipment,
+  demoProducts,
+  demoZones,
+  loadDemo,
+  saveDemo,
+} from "./demo";
 import { localDate } from "./domain";
 import { BRANCH_OPTIONS } from "./intakeData";
 import { loadOperations } from "./operationsStore";
@@ -701,6 +707,11 @@ export function createService(demo: boolean) {
               unit: item.unit,
               receiverName: shipment.receiver_snapshot.display_name,
               senderName: shipment.sender_snapshot.display_name,
+              districtName:
+                demoZones
+                  .flatMap((zone) => zone.districts)
+                  .find((district) => district.id === shipment.district_id)
+                  ?.name || "ไม่ระบุอำเภอ",
               openedAt: shipment.received_at,
               paymentMode: shipment.payment_mode,
               amount:

@@ -360,16 +360,23 @@ export default function DeliveryWork() {
   function addBill() {
     const shipmentNo = completeBillNumber(prefix, entry);
     const bill = bills.find((row) => row.shipmentNo === shipmentNo);
-    if (!bill)
+    if (!bill) {
       w.toast(`ไม่พบบิล ${shipmentNo || entry} ในรายการรอส่งของสาขานี้`, true);
-    else if (selected.has(bill.id))
+      window.requestAnimationFrame(() => {
+        inputRef.current?.focus({ preventScroll: true });
+        inputRef.current?.select();
+      });
+      return;
+    } else if (selected.has(bill.id))
       w.toast(`เลือกบิล ${bill.shipmentNo} ไว้แล้ว`);
     else {
       selectBill(bill, true);
       w.toast(`เลือกบิล ${bill.shipmentNo} แล้ว`);
     }
     setEntry("");
-    inputRef.current?.focus();
+    window.requestAnimationFrame(() =>
+      inputRef.current?.focus({ preventScroll: true }),
+    );
   }
   function clearFilters() {
     setSearch("");

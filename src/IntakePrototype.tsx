@@ -879,23 +879,10 @@ export default function IntakePrototype() {
           bills: [bill, ...current.bills],
           drafts: blank(loginOpener.id),
         }));
-        const workspace = await loadRemoteWorkspace();
-        setOperations(workspace.operations);
-        setState((current) => ({
-          ...current,
-          parties: workspace.registry.parties,
-          catalog: workspace.registry.catalog,
-          defaults: workspace.registry.defaults,
-          partyRoles: workspace.registry.partyRoles,
-          catalogActive:
-            (workspace.registry.raw.catalogActive as Record<string, boolean>) ||
-            {},
-        }));
         setSenderGlobal(false);
         setProductGlobal({});
         setError("");
         setPreview(bill);
-        w.refresh();
         w.toast(`บันทึกบิล ${issued.number} ลงฐานข้อมูลแล้ว`);
       } catch (cause) {
         setError(`บันทึกบิลไม่สำเร็จ: ${(cause as Error).message}`);
