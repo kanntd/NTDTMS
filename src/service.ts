@@ -539,6 +539,17 @@ export function createService(demo: boolean) {
       if (!trip || trip.status !== "DRAFT")
         throw new Error("เที่ยวรถนี้แก้สินค้าไม่ได้");
       const shipments = allDemoShipments();
+      if (
+        mode === "ADD" &&
+        changes.some((change) =>
+          trip.allocations.some(
+            (allocation) => allocation.shipmentId === change.shipmentId,
+          ),
+        )
+      )
+        throw new Error(
+          "บิลนี้อยู่ในเที่ยวรถนี้แล้ว กรุณาแก้จำนวนจากเที่ยวรถเดิม",
+        );
       for (const change of changes) {
         const shipment = shipments.find((row) => row.id === change.shipmentId);
         const item = shipment?.items.find((row) => row.id === change.itemId);
@@ -649,8 +660,14 @@ export function createService(demo: boolean) {
       trip.updatedAt = new Date().toISOString();
       saveDemoLoads(loads);
     },
-    loadTrips: async (): Promise<LoadTripRecord[]> => {
-      if (!demo) return api.getLoadTrips();
+    loadTrips: async (
+      options: {
+        status?: LoadTripStatus;
+        includeAllocations?: boolean;
+        limit?: number;
+      } = {},
+    ): Promise<LoadTripRecord[]> => {
+      if (!demo) return api.getLoadTrips(options);
       const sourceRows = [
         ...receptionLoadingQueue(),
         ...loadDemo().shipments.map((row): LoadingQueueRecord => ({
@@ -671,60 +688,67 @@ export function createService(demo: boolean) {
           items: row.items,
         })),
       ];
-      return readDemoLoads().map((load) => ({
-        id: load.id,
-        manifestNo: load.manifestNo,
-        status: load.status,
-        destinationBranchId: "",
-        destinationBranchCode: load.destinationBranchCode,
-        vehicleId: load.vehicleId,
-        vehicleNo: load.vehicleNo,
-        driverId: load.driverId,
-        driverName: load.driverName,
-        loadedAt: load.loadedAt || load.confirmedAt,
-        departedAt: ["DEPARTED", "RECEIVED"].includes(load.status)
-          ? load.confirmedAt
-          : "",
-        receivedAt: load.receivedAt || "",
-        note: load.note,
-        allocations: load.allocations.flatMap((allocation) => {
-          const shipment = sourceRows.find(
-            (row) => row.id === allocation.shipmentId,
-          );
-          const item = shipment?.items.find(
-            (row) => row.id === allocation.itemId,
-          );
-          if (!shipment || !item) return [];
-          return [
-            {
-              id: `${load.id}:${allocation.itemId}`,
-              shipmentId: shipment.id,
-              shipmentNo: shipment.shipment_no,
-              itemId: item.id,
-              description: item.description,
-              quantity: allocation.quantity,
-              originalQuantity: item.quantity,
-              unit: item.unit,
-              receiverName: shipment.receiver_snapshot.display_name,
-              senderName: shipment.sender_snapshot.display_name,
-              districtName:
-                demoZones
-                  .flatMap((zone) => zone.districts)
-                  .find((district) => district.id === shipment.district_id)
-                  ?.name || "ไม่ระบุอำเภอ",
-              openedAt: shipment.received_at,
-              paymentMode: shipment.payment_mode,
-              amount:
-                shipment.total_quantity > 0
-                  ? (shipment.total_amount / shipment.total_quantity) *
-                    allocation.quantity
-                  : 0,
-              shipmentStatus: shipment.shipment_status,
-              active: load.status !== "CANCELLED",
-            },
-          ];
-        }),
-      }));
+      return readDemoLoads()
+        .filter((load) => !options.status || load.status === options.status)
+        .slice(0, options.limit || 200)
+        .map((load) => ({
+          id: load.id,
+          manifestNo: load.manifestNo,
+          status: load.status,
+          destinationBranchId: "",
+          destinationBranchCode: load.destinationBranchCode,
+          vehicleId: load.vehicleId,
+          vehicleNo: load.vehicleNo,
+          driverId: load.driverId,
+          driverName: load.driverName,
+          loadedAt: load.loadedAt || load.confirmedAt,
+          departedAt: ["DEPARTED", "RECEIVED"].includes(load.status)
+            ? load.confirmedAt
+            : "",
+          receivedAt: load.receivedAt || "",
+          note: load.note,
+          allocations:
+            options.includeAllocations === false
+              ? []
+              : load.allocations.flatMap((allocation) => {
+                  const shipment = sourceRows.find(
+                    (row) => row.id === allocation.shipmentId,
+                  );
+                  const item = shipment?.items.find(
+                    (row) => row.id === allocation.itemId,
+                  );
+                  if (!shipment || !item) return [];
+                  return [
+                    {
+                      id: `${load.id}:${allocation.itemId}`,
+                      shipmentId: shipment.id,
+                      shipmentNo: shipment.shipment_no,
+                      itemId: item.id,
+                      description: item.description,
+                      quantity: allocation.quantity,
+                      originalQuantity: item.quantity,
+                      unit: item.unit,
+                      receiverName: shipment.receiver_snapshot.display_name,
+                      senderName: shipment.sender_snapshot.display_name,
+                      districtName:
+                        demoZones
+                          .flatMap((zone) => zone.districts)
+                          .find(
+                            (district) => district.id === shipment.district_id,
+                          )?.name || "ไม่ระบุอำเภอ",
+                      openedAt: shipment.received_at,
+                      paymentMode: shipment.payment_mode,
+                      amount:
+                        shipment.total_quantity > 0
+                          ? (shipment.total_amount / shipment.total_quantity) *
+                            allocation.quantity
+                          : 0,
+                      shipmentStatus: shipment.shipment_status,
+                      active: load.status !== "CANCELLED",
+                    },
+                  ];
+                }),
+        }));
     },
     deliveryLines: async () => {
       if (!demo) return api.getDeliveryLines();

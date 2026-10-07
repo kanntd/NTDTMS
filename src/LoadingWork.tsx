@@ -181,7 +181,10 @@ export default function LoadingWork({
     try {
       const [nextRows, nextTrips] = await Promise.all([
         w.service.loadingQueue(),
-        w.service.loadTrips(),
+        w.service.loadTrips({
+          status: "DRAFT",
+          includeAllocations: true,
+        }),
       ]);
       setRows(nextRows);
       setTrips(nextTrips);
@@ -381,6 +384,14 @@ export default function LoadingWork({
         w.zones,
       ),
   );
+  const eligibleDraftTrips = draftTrips.filter((trip) =>
+    selectedRows.every(
+      (row) =>
+        !trip.allocations.some(
+          (allocation) => allocation.active && allocation.shipmentId === row.id,
+        ),
+    ),
+  );
   const issuingBranch =
     w.branches.find((row) => row.id === w.profile.branch_id) ||
     w.branches.find((row) => row.can_issue_bills);
@@ -461,7 +472,8 @@ export default function LoadingWork({
   }
 
   function toggleVisible() {
-    const allSelected = visible.every((row) => selected.has(row.id));
+    const allSelected =
+      visible.length > 0 && visible.every((row) => selected.has(row.id));
     selectRows(
       visible.map((row) => row.id),
       !allSelected,
@@ -477,6 +489,14 @@ export default function LoadingWork({
         billEntryRef.current?.focus({ preventScroll: true });
         billEntryRef.current?.select();
       });
+      return;
+    }
+    if (selected.has(row.id)) {
+      w.toast(`เลือกบิล ${row.shipment_no} ไว้แล้ว`, true);
+      setBillEntry("");
+      window.requestAnimationFrame(() =>
+        billEntryRef.current?.focus({ preventScroll: true }),
+      );
       return;
     }
     const destination = branchCode(row, w.zones, w.branches);
@@ -527,6 +547,7 @@ export default function LoadingWork({
   async function saveSelection() {
     if (
       !tripId ||
+      !eligibleDraftTrips.some((trip) => trip.id === tripId) ||
       allocations.length === 0 ||
       mixedBranches ||
       invalidAllocation
@@ -1002,7 +1023,10 @@ export default function LoadingWork({
                         <input
                           type="checkbox"
                           aria-label="เลือกบิลที่แสดงทั้งหมด"
-                          checked={visible.every((row) => selected.has(row.id))}
+                          checked={
+                            visible.length > 0 &&
+                            visible.every((row) => selected.has(row.id))
+                          }
                           onChange={toggleVisible}
                         />
                       </th>
@@ -1021,9 +1045,9 @@ export default function LoadingWork({
                       ? visible.map(renderBillRow)
                       : groupedRows.map((group) => {
                           const groupIds = group.rows.map((row) => row.id);
-                          const allSelected = groupIds.every((id) =>
-                            selected.has(id),
-                          );
+                          const allSelected =
+                            groupIds.length > 0 &&
+                            groupIds.every((id) => selected.has(id));
                           const collapsed = collapsedGroups.has(group.key);
                           return (
                             <Fragment key={group.key}>
@@ -1106,7 +1130,7 @@ export default function LoadingWork({
                 className="primary"
                 disabled={mixedBranches}
                 onClick={() => {
-                  setTripId(draftTrips[0]?.id || "");
+                  setTripId(eligibleDraftTrips[0]?.id || "");
                   setConfirming(true);
                 }}
               >
@@ -1196,7 +1220,7 @@ export default function LoadingWork({
                 onChange={(event) => setTripId(event.target.value)}
               >
                 <option value="">เลือกเที่ยวรถที่กำลังจัดของ</option>
-                {draftTrips.map((trip) => {
+                {eligibleDraftTrips.map((trip) => {
                   const plate =
                     operations.vehicles.find(
                       (vehicle) => vehicle.id === trip.vehicleId,
@@ -1211,9 +1235,11 @@ export default function LoadingWork({
                 })}
               </select>
             </Field>
-            {!draftTrips.length && (
+            {!eligibleDraftTrips.length && (
               <div className="alert error">
-                กรุณาสร้างเที่ยวรถของสาขานี้ก่อน
+                {draftTrips.length
+                  ? "บิลที่เลือกอยู่ในเที่ยวรถเหล่านี้แล้ว กรุณาเลือกหรือสร้างรถคันอื่น"
+                  : "กรุณาสร้างเที่ยวรถของสาขานี้ก่อน"}
                 <Button
                   onClick={() => {
                     setConfirming(false);
@@ -1285,7 +1311,10 @@ export default function LoadingWork({
                 className="primary"
                 busy={busy}
                 disabled={
-                  !tripId || invalidAllocation || allocations.length === 0
+                  !tripId ||
+                  !eligibleDraftTrips.some((trip) => trip.id === tripId) ||
+                  invalidAllocation ||
+                  allocations.length === 0
                 }
                 onClick={() => void saveSelection()}
               >

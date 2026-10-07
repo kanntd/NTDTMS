@@ -77,6 +77,7 @@ export default function App() {
     [query, setQuery] = useState(""),
     [loadBranch, setLoadBranch] = useState(""),
     [revision, setRevision] = useState(0),
+    [masterRevision, setMasterRevision] = useState(0),
     [masters, setMasters] = useState<{
       branches: CompanyBranch[];
       zones: Zone[];
@@ -94,7 +95,11 @@ export default function App() {
       (message: string, error = false) => setNotice({ message, error }),
       [],
     ),
-    refresh = useCallback(() => setRevision((r) => r + 1), []);
+    refreshData = useCallback(() => setRevision((r) => r + 1), []),
+    refresh = useCallback(() => {
+      setRevision((r) => r + 1);
+      setMasterRevision((r) => r + 1);
+    }, []);
   useEffect(() => {
     supabase.auth.getSession().then(({ data, error }) => {
       setSession(data.session);
@@ -137,7 +142,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [demo, session?.user.id, revision]);
+  }, [demo, session?.user.id, masterRevision]);
   useEffect(() => {
     if (!profile?.is_active) return;
     let active = true;
@@ -155,13 +160,13 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [service, profile?.id, revision]);
+  }, [service, profile?.id, masterRevision]);
   useEffect(() => {
     if (demo || !profile?.is_active) return;
     let refreshTimer: number | undefined;
     const queueRefresh = () => {
       window.clearTimeout(refreshTimer);
-      refreshTimer = window.setTimeout(refresh, 800);
+      refreshTimer = window.setTimeout(refreshData, 800);
     };
     const channel = supabase
       .channel(`ntdtms-workspace-${profile.company_id}`)
@@ -187,7 +192,7 @@ export default function App() {
       document.removeEventListener("visibilitychange", refreshWhenVisible);
       void supabase.removeChannel(channel);
     };
-  }, [demo, profile?.company_id, profile?.is_active, refresh]);
+  }, [demo, profile?.company_id, profile?.is_active, refreshData]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(null), 6500);

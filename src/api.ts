@@ -22,6 +22,7 @@ import type {
   CodPaymentRecord,
 } from "./types";
 import { applyRecordedLoads } from "./loadingQueue";
+import { chunkValues } from "./queryChunks";
 
 export const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -512,31 +513,52 @@ export async function setLoadTripStatus(
   });
   if (result.error) throw result.error;
 }
-export async function getLoadTrips(): Promise<LoadTripRecord[]> {
-  const manifestResult = await supabase
+export async function getLoadTrips(
+  options: {
+    status?: LoadTripStatus;
+    includeAllocations?: boolean;
+    limit?: number;
+  } = {},
+): Promise<LoadTripRecord[]> {
+  let manifestQuery = supabase
     .from("load_manifests")
     .select(
       "id,manifest_no,status,destination_branch_id,vehicle_id,driver_employee_id,loaded_at,departed_at,received_at,note,created_at",
     )
     .order("created_at", { ascending: false })
-    .limit(200);
+    .limit(options.limit || 200);
+  if (options.status)
+    manifestQuery = manifestQuery.eq("status", options.status);
+  const manifestResult = await manifestQuery;
   if (manifestResult.error) throw manifestResult.error;
   const manifests = manifestResult.data || [];
   if (!manifests.length) return [];
 
   const manifestIds = manifests.map((row) => String(row.id));
-  const lineResult = await supabase
-    .from("load_manifest_item_lines")
-    .select(
-      "id,manifest_id,shipment_id,shipment_item_id,quantity,unit_snapshot,is_active",
-    )
-    .in("manifest_id", manifestIds)
-    .order("loaded_at");
-  if (lineResult.error) {
-    if (["42P01", "PGRST205"].includes(lineResult.error.code || "")) return [];
-    throw lineResult.error;
+  const lineResults =
+    options.includeAllocations === false
+      ? []
+      : await Promise.all(
+          chunkValues(manifestIds).map((ids) =>
+            supabase
+              .from("load_manifest_item_lines")
+              .select(
+                "id,manifest_id,shipment_id,shipment_item_id,quantity,unit_snapshot,is_active,loaded_at",
+              )
+              .in("manifest_id", ids)
+              .order("loaded_at"),
+          ),
+        );
+  for (const result of lineResults) {
+    if (!result.error) continue;
+    if (["42P01", "PGRST205"].includes(result.error.code || "")) return [];
+    throw result.error;
   }
-  const lines = lineResult.data || [];
+  const lines = lineResults
+    .flatMap((result) => result.data || [])
+    .sort((a, b) =>
+      String(a.loaded_at || "").localeCompare(String(b.loaded_at || "")),
+    );
   const shipmentIds = [...new Set(lines.map((row) => String(row.shipment_id)))];
   const itemIds = [
     ...new Set(lines.map((row) => String(row.shipment_item_id))),
@@ -562,26 +584,30 @@ export async function getLoadTrips(): Promise<LoadTripRecord[]> {
   ];
 
   const [
-    shipmentResult,
-    itemResult,
+    shipmentResults,
+    itemResults,
     vehicleResult,
     driverResult,
     branchResult,
   ] = await Promise.all([
-    shipmentIds.length
-      ? supabase
+    Promise.all(
+      chunkValues(shipmentIds).map((ids) =>
+        supabase
           .from("shipments")
           .select(
             "id,shipment_no,received_at,district_name,payment_mode,total_amount,total_quantity,receiver_snapshot,sender_snapshot,shipment_status",
           )
-          .in("id", shipmentIds)
-      : Promise.resolve({ data: [], error: null }),
-    itemIds.length
-      ? supabase
+          .in("id", ids),
+      ),
+    ),
+    Promise.all(
+      chunkValues(itemIds).map((ids) =>
+        supabase
           .from("shipment_items")
           .select("id,description,quantity,unit,unit_price")
-          .in("id", itemIds)
-      : Promise.resolve({ data: [], error: null }),
+          .in("id", ids),
+      ),
+    ),
     vehicleIds.length
       ? supabase
           .from("vehicle_assets")
@@ -599,20 +625,19 @@ export async function getLoadTrips(): Promise<LoadTripRecord[]> {
       : Promise.resolve({ data: [], error: null }),
   ]);
   for (const result of [
-    shipmentResult,
-    itemResult,
+    ...shipmentResults,
+    ...itemResults,
     vehicleResult,
     driverResult,
     branchResult,
   ])
     if (result.error) throw result.error;
 
-  const shipments = new Map(
-    (shipmentResult.data || []).map((row) => [String(row.id), row]),
-  );
-  const items = new Map(
-    (itemResult.data || []).map((row) => [String(row.id), row]),
-  );
+  const shipmentRows = shipmentResults.flatMap((result) => result.data || []);
+  const itemRows = itemResults.flatMap((result) => result.data || []);
+
+  const shipments = new Map(shipmentRows.map((row) => [String(row.id), row]));
+  const items = new Map(itemRows.map((row) => [String(row.id), row]));
   const vehicles = new Map(
     (vehicleResult.data || []).map((row) => [
       String(row.id),

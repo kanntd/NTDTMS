@@ -66,7 +66,7 @@ beforeEach(() => {
 });
 
 describe("load trip drafts", () => {
-  it("reserves quantities across trips and releases them when removed", async () => {
+  it("counts a split bill once per trip and blocks duplicate add to the same trip", async () => {
     const service = createService(true);
     const first = await service.createLoadTrip("LOAD-ONE", "KPT", "vehicle-1");
     const second = await service.createLoadTrip("LOAD-TWO", "KPT", "vehicle-1");
@@ -78,18 +78,27 @@ describe("load trip drafts", () => {
     ]);
     expect((await service.loadingQueue())[0].items[0].quantity).toBe(4);
     await expect(
-      service.saveLoadTripItems(second, "ADD", [
-        { shipmentId: "bill-1", itemId: "item-1", quantity: 5 },
+      service.saveLoadTripItems(first, "ADD", [
+        { shipmentId: "bill-1", itemId: "item-1", quantity: 4 },
       ]),
-    ).rejects.toThrow("จำนวนขึ้นรถมากกว่าจำนวนคงเหลือ");
-    await service.saveLoadTripItems(second, "ADD", [
-      { shipmentId: "bill-1", itemId: "item-1", quantity: 4 },
-    ]);
+    ).rejects.toThrow("อยู่ในเที่ยวรถนี้แล้ว");
+    await expect(
+      service.saveLoadTripItems(second, "ADD", [
+        { shipmentId: "bill-1", itemId: "item-1", quantity: 4 },
+      ]),
+    ).resolves.toBeUndefined();
     expect(await service.loadingQueue()).toHaveLength(0);
-    await service.saveLoadTripItems(first, "SET", [
-      { shipmentId: "bill-1", itemId: "item-1", quantity: 3 },
-    ]);
-    expect((await service.loadingQueue())[0].items[0].quantity).toBe(3);
+    const trips = await service.loadTrips();
+    expect(
+      trips
+        .find((trip) => trip.id === first)
+        ?.allocations.map((row) => row.shipmentId),
+    ).toEqual(["bill-1"]);
+    expect(
+      trips
+        .find((trip) => trip.id === second)
+        ?.allocations.map((row) => row.shipmentId),
+    ).toEqual(["bill-1"]);
   });
 
   it("closes a trip before departure and locks its allocations", async () => {

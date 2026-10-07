@@ -20,6 +20,7 @@ import { agreedPrice } from "./intakeData";
 import { destinationBranches } from "./branchRoutes";
 import { intakeAmounts, onePercent } from "./intakeMath";
 import { refreshDraftLinePrice } from "./intakeDraftPrice";
+import { hasIntakeDraftData } from "./intakeDraftGuard";
 import { nextLocalBillNumber } from "./billNumber";
 import IntakeEntryForm, { MeasurementFields } from "./IntakeEntryForm";
 import {
@@ -107,6 +108,8 @@ type State = {
   bills: Bill[];
 };
 const key = "ntdtms-reception-local-v5";
+const remoteDraftKey = (profileId: string) =>
+  `ntdtms-reception-draft-v1:${profileId}`;
 const blankLine = (): Line => ({
   id: crypto.randomUUID(),
   catalogId: "",
@@ -134,6 +137,25 @@ const blank = (openedByEmployeeId = ""): Draft => ({
   paymentReference: "",
   note: "",
 });
+function loadRemoteDraft(profileId: string): Draft | null {
+  try {
+    const stored = JSON.parse(
+      sessionStorage.getItem(remoteDraftKey(profileId)) || "null",
+    ) as Partial<Draft> | null;
+    if (!stored || !Array.isArray(stored.lines) || !stored.lines.length)
+      return null;
+    return {
+      ...blank(stored.openedByEmployeeId || ""),
+      ...stored,
+      lines: stored.lines.map((line) => ({
+        ...blankLine(),
+        ...line,
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
 const sortThai = (a: Choice, b: Choice) => a.label.localeCompare(b.label, "th");
 const normalized = (value: string) =>
   value.toLocaleLowerCase("th").replace(/\s|-/g, "");
@@ -369,9 +391,14 @@ function Picker({
 
 export default function IntakePrototype() {
   const w = useWorkspace();
-  const [state, setState] = useState(() => (w.demo ? load() : seed()));
+  const [state, setState] = useState(() => {
+    const initial = w.demo ? load() : seed();
+    const savedDraft = w.demo ? null : loadRemoteDraft(w.profile.id);
+    return savedDraft ? { ...initial, drafts: savedDraft } : initial;
+  });
   const [operations, setOperations] = useState(loadOperations);
   const [remoteReady, setRemoteReady] = useState(w.demo);
+  const [workspaceReloadToken, setWorkspaceReloadToken] = useState(0);
   const [busy, setBusy] = useState(false);
   const f = state.drafts;
   const [senderGlobal, setSenderGlobal] = useState(false);
@@ -388,6 +415,10 @@ export default function IntakePrototype() {
   const [fractionalWarning, setFractionalWarning] = useState(false);
   const [error, setError] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
+  const draftRef = useRef(state.drafts);
+  const deferredRevisionRef = useRef<number | null>(null);
+  const lastSeenRevisionRef = useRef(w.revision);
+  draftRef.current = state.drafts;
   useEffect(() => {
     if (w.demo) return;
     let active = true;
@@ -415,7 +446,39 @@ export default function IntakePrototype() {
     return () => {
       active = false;
     };
-  }, [w.demo, w.revision]);
+  }, [w.demo, workspaceReloadToken]);
+  useEffect(() => {
+    if (w.demo) return;
+    try {
+      sessionStorage.setItem(
+        remoteDraftKey(w.profile.id),
+        JSON.stringify(state.drafts),
+      );
+    } catch {
+      // The in-memory draft remains usable if browser storage is unavailable.
+    }
+  }, [state.drafts, w.demo, w.profile.id]);
+  useEffect(() => {
+    if (w.demo || !remoteReady) return;
+    if (lastSeenRevisionRef.current === w.revision) return;
+    lastSeenRevisionRef.current = w.revision;
+    if (hasIntakeDraftData(draftRef.current)) {
+      deferredRevisionRef.current = w.revision;
+      return;
+    }
+    setWorkspaceReloadToken((token) => token + 1);
+  }, [w.demo, w.revision, remoteReady]);
+  useEffect(() => {
+    if (
+      w.demo ||
+      !remoteReady ||
+      hasIntakeDraftData(state.drafts) ||
+      deferredRevisionRef.current === null
+    )
+      return;
+    deferredRevisionRef.current = null;
+    setWorkspaceReloadToken((token) => token + 1);
+  }, [state.drafts, w.demo, remoteReady]);
   useEffect(() => {
     if (!w.demo) return;
     try {

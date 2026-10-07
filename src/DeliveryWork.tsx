@@ -102,6 +102,8 @@ export default function DeliveryWork() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const saveInFlight = useRef(false);
+  const deliveryRequestIds = useRef(new Map<string, string>());
   const issuingBranch = w.branches.find((row) => row.can_issue_bills);
   const prefix = billNumberPrefix(issuingBranch?.document_code || "B01");
 
@@ -221,6 +223,9 @@ export default function DeliveryWork() {
   useEffect(() => {
     setSelected(new Set());
     setAmounts({});
+    deliveryRequestIds.current.clear();
+  }, [branch]);
+  useEffect(() => {
     if (branch) void refresh();
   }, [branch, w.revision]);
 
@@ -356,6 +361,7 @@ export default function DeliveryWork() {
             .map((item) => [item.id, String(item.remaining)]),
         ),
       }));
+    else deliveryRequestIds.current.delete(bill.id);
   }
   function addBill() {
     const shipmentNo = completeBillNumber(prefix, entry);
@@ -368,7 +374,7 @@ export default function DeliveryWork() {
       });
       return;
     } else if (selected.has(bill.id))
-      w.toast(`เลือกบิล ${bill.shipmentNo} ไว้แล้ว`);
+      w.toast(`เลือกบิล ${bill.shipmentNo} ไว้แล้ว`, true);
     else {
       selectBill(bill, true);
       w.toast(`เลือกบิล ${bill.shipmentNo} แล้ว`);
@@ -390,6 +396,7 @@ export default function DeliveryWork() {
     setProgress("");
   }
   async function save() {
+    if (saveInFlight.current) return;
     const invalid = selectedBills.some((bill) =>
       bill.items.some((item) => {
         const value = Number(amounts[item.id] || 0);
@@ -397,33 +404,54 @@ export default function DeliveryWork() {
       }),
     );
     if (invalid) return w.toast("กรุณาตรวจสอบจำนวนสินค้าที่ส่ง", true);
+    saveInFlight.current = true;
     setBusy(true);
+    let savedCount = 0;
     try {
       for (const bill of selectedBills) {
         const items = bill.items.flatMap((item) => {
           const value = Number(amounts[item.id] || 0);
           return value > 0 ? [{ itemId: item.id, quantity: value }] : [];
         });
-        if (items.length)
+        if (items.length) {
+          const requestId =
+            deliveryRequestIds.current.get(bill.id) || crypto.randomUUID();
+          deliveryRequestIds.current.set(bill.id, requestId);
           await w.service.recordDelivery({
             shipmentId: bill.id,
             result: "DELIVERED",
             collectedAmount: 0,
             note: "",
             roundReference: "",
-            requestId: crypto.randomUUID(),
+            requestId,
             items,
           });
+          deliveryRequestIds.current.delete(bill.id);
+          savedCount += 1;
+          setSelected((current) => {
+            const next = new Set(current);
+            next.delete(bill.id);
+            return next;
+          });
+          setAmounts((current) => {
+            const next = { ...current };
+            bill.items.forEach((item) => delete next[item.id]);
+            return next;
+          });
+        }
       }
-      w.toast(`บันทึกส่งสินค้า ${selectedBills.length} บิลแล้ว`);
+      w.toast(`บันทึกส่งสินค้า ${savedCount} บิลแล้ว`);
       setReviewing(false);
-      setSelected(new Set());
-      setAmounts({});
       await refresh();
       w.refresh();
     } catch (cause) {
-      w.toast((cause as Error).message || "บันทึกผลส่งสินค้าไม่สำเร็จ", true);
+      const message = (cause as Error).message || "บันทึกผลส่งสินค้าไม่สำเร็จ";
+      w.toast(
+        savedCount > 0 ? `บันทึกแล้ว ${savedCount} บิล · ${message}` : message,
+        true,
+      );
     } finally {
+      saveInFlight.current = false;
       setBusy(false);
     }
   }
