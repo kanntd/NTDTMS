@@ -21,6 +21,11 @@ jobs:
     name: Test and build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # Tests import the browser client but never call the remote database.
+      # Real production values remain configured only in Cloudflare Pages.
+      VITE_SUPABASE_URL: https://example.supabase.co
+      VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_placeholder
 
     steps:
       - name: Check out repository
