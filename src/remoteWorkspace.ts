@@ -360,3 +360,43 @@ export async function resolveRemotePriceRequest(
     price_version_id: string | null;
   };
 }
+
+export async function submitRemotePriceProposal(
+  requestId: string,
+  proposedPrice: number,
+  actualCollectedAmount: number | null,
+  proposalNote: string,
+) {
+  const result = await supabase.rpc("submit_price_proposal", {
+    request_id: requestId,
+    proposed_price: proposedPrice,
+    actual_collected_amount: actualCollectedAmount,
+    proposal_note: proposalNote,
+  });
+  if (result.error) throw result.error;
+  return result.data as {
+    request_id: string;
+    status: "PENDING_APPROVAL";
+    proposed_price: number;
+    actual_collected_amount: number | null;
+    note: string;
+    submitted_at: string;
+  };
+}
+
+export async function returnRemotePriceRequest(
+  requestId: string,
+  returnReason: string,
+) {
+  const result = await supabase.rpc("return_shared_price_request", {
+    request_id: requestId,
+    return_reason: returnReason,
+  });
+  if (result.error) throw result.error;
+  return result.data as {
+    request_id: string;
+    status: "RETURNED";
+    returned_at: string;
+    return_reason: string;
+  };
+}

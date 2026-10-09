@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  canReviewPriceRequest,
   isWithinPriceHistoryRange,
   isWithinPriceRequestRange,
   matchesPriceFilters,
+  shouldShowPriceRequest,
 } from "./Pricing";
 
 const row = {
   receiverId: "receiver-a",
   senderId: "sender-a",
   catalogId: "shoe-sack",
+  productId: "shoe",
+  unit: "กระสอบ",
   payment: "CREDIT_DESTINATION" as const,
   branch: "STI",
 };
@@ -17,7 +21,8 @@ const filters = {
   query: "",
   receiverId: "",
   senderId: "",
-  catalogId: "",
+  productId: "",
+  unit: "",
   payment: "" as const,
   branch: "",
 };
@@ -34,7 +39,8 @@ describe("pricing filters", () => {
           ...filters,
           receiverId: "receiver-a",
           senderId: "sender-a",
-          catalogId: "shoe-sack",
+          productId: "shoe",
+          unit: "กระสอบ",
           payment: "CREDIT_DESTINATION",
           branch: "STI",
         },
@@ -44,6 +50,30 @@ describe("pricing filters", () => {
     expect(matchesPriceFilters({ ...filters, senderId: "sender-b" }, row)).toBe(
       false,
     );
+    expect(matchesPriceFilters({ ...filters, unit: "กล่อง" }, row)).toBe(false);
+  });
+
+  it("separates product and unit filters", () => {
+    expect(matchesPriceFilters({ ...filters, productId: "shoe" }, row)).toBe(true);
+    expect(matchesPriceFilters({ ...filters, productId: "bag" }, row)).toBe(false);
+    expect(matchesPriceFilters({ ...filters, unit: "กระสอบ" }, row)).toBe(true);
+  });
+
+  it("allows only accounting reviewers to record an accounting result", () => {
+    expect(canReviewPriceRequest("owner")).toBe(true);
+    expect(canReviewPriceRequest("admin")).toBe(true);
+    expect(canReviewPriceRequest("accountant")).toBe(true);
+    expect(canReviewPriceRequest("clerk")).toBe(false);
+    expect(canReviewPriceRequest("viewer")).toBe(false);
+  });
+
+  it("includes resolved and cancelled requests only when all rows are requested", () => {
+    expect(shouldShowPriceRequest("PENDING_PRICE", false)).toBe(true);
+    expect(shouldShowPriceRequest("PENDING_APPROVAL", false)).toBe(true);
+    expect(shouldShowPriceRequest("RESOLVED", false)).toBe(false);
+    expect(shouldShowPriceRequest("CANCELLED", false)).toBe(false);
+    expect(shouldShowPriceRequest("RESOLVED", true)).toBe(true);
+    expect(shouldShowPriceRequest("CANCELLED", true)).toBe(true);
   });
 
   it("treats history date boundaries as inclusive", () => {
