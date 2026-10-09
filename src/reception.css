@@ -1402,6 +1402,36 @@
   font-size: 12px;
   font-weight: 600;
 }
+.pricing-filter-toggle {
+  height: 40px;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #c9d7d0;
+  border-radius: 5px;
+  background: #fff;
+  color: #304a40;
+  cursor: pointer;
+}
+.pricing-filter-toggle input {
+  flex: none;
+  margin: 0;
+}
+.pricing-filter-toggle span,
+.pricing-filter-toggle strong,
+.pricing-filter-toggle small {
+  min-width: 0;
+  display: block;
+}
+.pricing-filter-toggle strong {
+  font-size: 13px;
+}
+.pricing-filter-toggle small {
+  margin-top: 1px;
+  color: #718178;
+  font-size: 11px;
+}
 .pricing-filter-control > select,
 .pricing-filter-control > input,
 .pricing-filter-picker > button {
@@ -1527,6 +1557,16 @@
   border-color: #9bcdbf;
   background: #eef9f5;
   color: #08795f;
+}
+.request-status.resolved {
+  border-color: #9bcdbf;
+  background: #eef9f5;
+  color: #08795f;
+}
+.request-status.cancelled {
+  border-color: #d8d8d8;
+  background: #f5f5f5;
+  color: #777;
 }
 .pending-price-table-wrap {
   margin-top: 16px;
@@ -1833,6 +1873,10 @@
   border: 1px solid #d7e1dc;
   background: #f7faf8;
   color: #64776e;
+}
+.request-price-proposal.approved {
+  border-color: #9bcdbf;
+  background: #eef9f5;
 }
 .request-price-proposal strong {
   color: #184739;

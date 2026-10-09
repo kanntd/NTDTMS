@@ -39,7 +39,7 @@ import {
 import { localDate, money, thaiDate, thaiTime } from "./domain";
 import DateInput from "./DateInput";
 import { intakeAmounts, onePercent } from "./intakeMath";
-import { PAYMENT_LABELS, type PaymentMode } from "./types";
+import { PAYMENT_LABELS, type PaymentMode, type Role } from "./types";
 import {
   Button,
   Empty,
@@ -51,7 +51,9 @@ import {
 } from "./ui";
 import {
   loadRemoteWorkspace,
+  returnRemotePriceRequest,
   resolveRemotePriceRequest,
+  submitRemotePriceProposal,
   syncRemoteWorkspace,
 } from "./remoteWorkspace";
 
@@ -60,7 +62,8 @@ type PriceFilters = {
   query: string;
   receiverId: string;
   senderId: string;
-  catalogId: string;
+  productId: string;
+  unit: string;
   payment: PaymentMode | "";
   branch: string;
 };
@@ -71,6 +74,10 @@ type PriceDimensions = {
   catalogId: string;
   payment: PaymentMode;
   branch: string;
+};
+type FilterablePriceDimensions = PriceDimensions & {
+  productId: string;
+  unit: string;
 };
 type LocalPriceLine = {
   catalogId: string;
@@ -127,22 +134,35 @@ const emptyFilters: PriceFilters = {
   query: "",
   receiverId: "",
   senderId: "",
-  catalogId: "",
+  productId: "",
+  unit: "",
   payment: "",
   branch: "",
 };
 
 export function matchesPriceFilters(
   filters: PriceFilters,
-  row: PriceDimensions,
+  row: FilterablePriceDimensions,
 ) {
   return (
     (!filters.receiverId || row.receiverId === filters.receiverId) &&
     (!filters.senderId || row.senderId === filters.senderId) &&
-    (!filters.catalogId || row.catalogId === filters.catalogId) &&
+    (!filters.productId || row.productId === filters.productId) &&
+    (!filters.unit || row.unit === filters.unit) &&
     (!filters.payment || row.payment === filters.payment) &&
     (!filters.branch || row.branch === filters.branch)
   );
+}
+
+export function canReviewPriceRequest(role: Role) {
+  return role === "owner" || role === "admin" || role === "accountant";
+}
+
+export function shouldShowPriceRequest(
+  status: PriceRequest["status"],
+  showAll: boolean,
+) {
+  return showAll || (status !== "RESOLVED" && status !== "CANCELLED");
 }
 
 export function isWithinPriceHistoryRange(
@@ -479,6 +499,7 @@ export default function Pricing() {
   const [pendingStatus, setPendingStatus] = useState<
     PriceRequest["status"] | ""
   >("");
+  const [showAllRequests, setShowAllRequests] = useState(false);
   const [requestFrom, setRequestFrom] = useState("");
   const [requestTo, setRequestTo] = useState("");
   const [historyFrom, setHistoryFrom] = useState("");
@@ -486,6 +507,7 @@ export default function Pricing() {
   const [historyApprover, setHistoryApprover] = useState("");
   const [editing, setEditing] = useState<PriceAgreement | null>(null);
   const [resolving, setResolving] = useState<PriceRequest | null>(null);
+  const [savingRequest, setSavingRequest] = useState(false);
 
   useEffect(() => {
     if (w.demo) return;
@@ -518,6 +540,7 @@ export default function Pricing() {
   if (loadingRemote) return <Loading />;
 
   const dimensions = [...operations.agreements, ...operations.priceRequests];
+  const catalogById = new Map(registry.catalog.map((item) => [item.id, item]));
   const branchDimensions = dimensions.filter((row) =>
     isDestinationBranch(row.branch, filters.branch, w.branches, w.zones),
   );
@@ -537,18 +560,32 @@ export default function Pricing() {
   ]
     .map((id) => ({ id, label: partyName(registry.parties, id) }))
     .sort((a, b) => a.label.localeCompare(b.label, "th"));
+  const scopedCatalog = branchDimensions
+    .filter(
+      (row) =>
+        (!filters.receiverId || row.receiverId === filters.receiverId) &&
+        (!filters.senderId || row.senderId === filters.senderId),
+    )
+    .map((row) => catalogById.get(row.catalogId))
+    .filter((item) => item !== undefined);
   const productOptions = [
+    ...new Map(
+      scopedCatalog
+        .filter((item) => item.productId)
+        .map((item) => [item.productId, { id: item.productId, label: item.name }]),
+    ).values(),
+  ].sort((a, b) => a.label.localeCompare(b.label, "th"));
+  const unitOptions = [
     ...new Set(
-      branchDimensions
+      scopedCatalog
         .filter(
-          (row) =>
-            (!filters.receiverId || row.receiverId === filters.receiverId) &&
-            (!filters.senderId || row.senderId === filters.senderId),
+          (item) => !filters.productId || item.productId === filters.productId,
         )
-        .map((row) => row.catalogId),
+        .map((item) => item.unit)
+        .filter(Boolean),
     ),
   ]
-    .map((id) => ({ id, label: catalogName(registry.catalog, id) }))
+    .map((unit) => ({ id: unit, label: unit }))
     .sort((a, b) => a.label.localeCompare(b.label, "th"));
   const approverOptions = [
     ...new Set(operations.priceVersions.map((row) => row.approvedBy)),
@@ -556,9 +593,20 @@ export default function Pricing() {
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b, "th"));
   const normalized = filters.query.trim().toLocaleLowerCase("th");
-  const matchesDimensions = (row: PriceDimensions) =>
-    matchesPriceFilters({ ...filters, branch: "" }, row) &&
-    isDestinationBranch(row.branch, filters.branch, w.branches, w.zones);
+  const matchesDimensions = (row: PriceDimensions) => {
+    const catalog = catalogById.get(row.catalogId);
+    return (
+      matchesPriceFilters(
+        { ...filters, branch: "" },
+        {
+          ...row,
+          productId: catalog?.productId || "",
+          unit: catalog?.unit || "",
+        },
+      ) &&
+      isDestinationBranch(row.branch, filters.branch, w.branches, w.zones)
+    );
+  };
   const currentRows = operations.agreements
     .filter((row) => row.active && row.currentVersionId)
     .filter(matchesDimensions)
@@ -580,7 +628,7 @@ export default function Pricing() {
         .includes(normalized);
     });
   const pendingRows = operations.priceRequests
-    .filter((row) => row.status !== "RESOLVED" && row.status !== "CANCELLED")
+    .filter((row) => shouldShowPriceRequest(row.status, showAllRequests))
     .filter(matchesDimensions)
     .filter((row) => !pendingStatus || row.status === pendingStatus)
     .filter((row) =>
@@ -637,13 +685,15 @@ export default function Pricing() {
     filters.query ||
     filters.receiverId ||
     filters.senderId ||
-    filters.catalogId ||
+    filters.productId ||
+    filters.unit ||
     filters.payment ||
     filters.branch,
   );
   function clearFilters() {
     setFilters(emptyFilters);
     setPendingStatus("");
+    setShowAllRequests(false);
     setRequestFrom("");
     setRequestTo("");
     setHistoryFrom("");
@@ -651,109 +701,168 @@ export default function Pricing() {
     setHistoryApprover("");
   }
 
-  function savePriceRequest(
+  async function savePriceRequest(
     proposedPrice: number | null,
     approvedPrice: number | null,
     actualCollectedAmount: number | null,
     decision: "STANDARD" | "BILL_ONLY" | "SUBMIT" | "RETURN",
     note: string,
   ) {
-    if (!resolving) return;
-    if (!w.demo && (decision === "STANDARD" || decision === "BILL_ONLY")) {
-      void resolveRemotePriceRequest(
-        resolving.id,
-        approvedPrice!,
-        decision,
-        note,
-      )
-        .then(async (result) => {
-          const workspace = await loadRemoteWorkspace();
-          setRegistry(workspace.registry);
-          setOperations(workspace.operations);
-          w.refresh();
-          w.toast(
-            decision === "STANDARD"
-              ? `ยืนยันราคาและอัปเดตบิลรอราคา ${result.affected_requests} บิลแล้ว`
-              : "ยืนยันราคาเฉพาะบิลแล้ว ราคามาตรฐานไม่เปลี่ยน",
+    if (!resolving || savingRequest) return;
+    const requestId = resolving.id;
+    setSavingRequest(true);
+    try {
+      if (!w.demo) {
+        if (decision === "SUBMIT") {
+          if (proposedPrice === null) throw new Error("กรุณาระบุราคาเสนอ");
+          const result = await submitRemotePriceProposal(
+            requestId,
+            proposedPrice,
+            actualCollectedAmount,
+            note,
           );
+          const updated: PriceRequest = {
+            ...resolving,
+            proposedPrice: result.proposed_price,
+            actualCollectedAmount: result.actual_collected_amount,
+            note: result.note,
+            status: result.status,
+            submittedAt: result.submitted_at,
+            returnReason: undefined,
+          };
+          setOperations((current) => ({
+            ...current,
+            priceRequests: current.priceRequests.map((row) =>
+              row.id === requestId ? updated : row,
+            ),
+          }));
+          w.toast("บันทึกราคาเสนอแล้ว ส่งให้บัญชียืนยัน");
+          setResolving(canReviewPriceRequest(w.profile.role) ? updated : null);
+          return;
+        }
+        if (decision === "RETURN") {
+          const result = await returnRemotePriceRequest(requestId, note);
+          setOperations((current) => ({
+            ...current,
+            priceRequests: current.priceRequests.map((row) =>
+              row.id === requestId
+                ? {
+                    ...row,
+                    status: result.status,
+                    returnedAt: result.returned_at,
+                    returnReason: result.return_reason,
+                  }
+                : row,
+            ),
+          }));
+          w.toast("ส่งกลับให้แก้ราคาเสนอแล้ว");
           setResolving(null);
-        })
-        .catch((error) =>
-          w.toast(`ยืนยันราคาไม่สำเร็จ: ${error.message}`, true),
+          return;
+        }
+        const result = await resolveRemotePriceRequest(
+          requestId,
+          approvedPrice!,
+          decision,
+          note,
         );
-      return;
-    }
-    const next = structuredClone(operations);
-    const request = next.priceRequests.find((row) => row.id === resolving.id);
-    if (!request) return;
-    request.actualCollectedAmount = actualCollectedAmount;
-    const timestamp = new Date().toISOString();
-    if (decision === "SUBMIT") {
-      request.proposedPrice = proposedPrice;
-      request.note = note;
-      request.status = "PENDING_APPROVAL";
-      request.submittedAt = timestamp;
-      request.submittedBy = "ผู้ให้ข้อมูลราคา";
-      request.returnReason = undefined;
-    } else if (decision === "RETURN") {
-      request.status = "RETURNED";
-      request.returnedAt = timestamp;
-      request.returnedBy = "ผู้ดูแล NTD";
-      request.returnReason = note;
-    } else {
-      const finalPrice = approvedPrice!;
-      request.approvedPrice = finalPrice;
-      request.approvalNote = note;
-      request.status = "RESOLVED";
-      request.resolutionType = decision;
-      request.resolvedAt = timestamp;
-      request.resolvedBy = "ผู้ดูแล NTD";
-      const nextPendingBill = w.demo
-        ? applyResolvedPriceToLocalBills(request, finalPrice, decision)
-        : null;
-      if (decision === "BILL_ONLY" && nextPendingBill) {
-        next.priceRequests.push({
-          id: crypto.randomUUID(),
-          key: request.key,
+        const workspace = await loadRemoteWorkspace();
+        setRegistry(workspace.registry);
+        setOperations(workspace.operations);
+        w.toast(
+          decision === "STANDARD"
+            ? `ยืนยันราคาและอัปเดตบิลรอราคา ${result.affected_requests} บิลแล้ว`
+            : "ยืนยันราคาเฉพาะบิลแล้ว ราคามาตรฐานไม่เปลี่ยน",
+        );
+        setResolving(null);
+        return;
+      }
+
+      const next = structuredClone(operations);
+      const request = next.priceRequests.find((row) => row.id === requestId);
+      if (!request) return;
+      const timestamp = new Date().toISOString();
+      if (decision === "SUBMIT") {
+        if (proposedPrice === null) throw new Error("กรุณาระบุราคาเสนอ");
+        request.proposedPrice = proposedPrice;
+        request.actualCollectedAmount = actualCollectedAmount;
+        request.note = note;
+        request.status = "PENDING_APPROVAL";
+        request.submittedAt = timestamp;
+        request.submittedBy = "ผู้ให้ข้อมูลราคา";
+        request.returnReason = undefined;
+      } else if (decision === "RETURN") {
+        request.status = "RETURNED";
+        request.returnedAt = timestamp;
+        request.returnedBy = "ผู้ดูแล NTD";
+        request.returnReason = note;
+      } else {
+        const finalPrice = approvedPrice!;
+        request.approvedPrice = finalPrice;
+        request.approvalNote = note;
+        request.status = "RESOLVED";
+        request.resolutionType = decision;
+        request.resolvedAt = timestamp;
+        request.resolvedBy = "ผู้ดูแล NTD";
+        const nextPendingBill = applyResolvedPriceToLocalBills(
+          request,
+          finalPrice,
+          decision,
+        );
+        if (decision === "BILL_ONLY" && nextPendingBill) {
+          next.priceRequests.push({
+            id: crypto.randomUUID(),
+            key: request.key,
+            receiverId: request.receiverId,
+            senderId: request.senderId,
+            catalogId: request.catalogId,
+            payment: request.payment,
+            branch: request.branch,
+            billNumber: nextPendingBill.billNumber,
+            quantity: nextPendingBill.quantity,
+            proposedPrice: null,
+            approvedPrice: null,
+            actualCollectedAmount: null,
+            status: "PENDING_PRICE",
+            requestedAt: nextPendingBill.requestedAt,
+            note: "รอข้อมูลราคา หลังคำขอก่อนหน้าอนุมัติเฉพาะบิล",
+          });
+        }
+      }
+      if (decision === "STANDARD")
+        addPriceVersion(next, {
           receiverId: request.receiverId,
           senderId: request.senderId,
           catalogId: request.catalogId,
           payment: request.payment,
           branch: request.branch,
-          billNumber: nextPendingBill.billNumber,
-          quantity: nextPendingBill.quantity,
-          proposedPrice: null,
-          approvedPrice: null,
-          actualCollectedAmount: null,
-          status: "PENDING_PRICE",
-          requestedAt: nextPendingBill.requestedAt,
-          note: "รอข้อมูลราคา หลังคำขอก่อนหน้าอนุมัติเฉพาะบิล",
+          price: approvedPrice!,
+          reason: note.trim() || `อนุมัติจากคำขอราคา ${request.billNumber}`,
+          effectiveFrom: request.requestedAt.slice(0, 10),
+          source: "PRICE_REQUEST",
         });
-      }
+      commit(
+        next,
+        decision === "STANDARD"
+          ? "ยืนยันราคาและสร้างราคามาตรฐานแล้ว"
+          : decision === "BILL_ONLY"
+            ? "ยืนยันราคาเฉพาะบิลแล้ว ราคามาตรฐานไม่เปลี่ยน"
+            : decision === "RETURN"
+              ? "ส่งกลับให้แก้ราคาเสนอแล้ว"
+              : "บันทึกราคาเสนอแล้ว ส่งให้บัญชียืนยัน",
+      );
+      setResolving(
+        decision === "SUBMIT" && canReviewPriceRequest(w.profile.role)
+          ? request
+          : null,
+      );
+    } catch (error) {
+      w.toast(
+        `บันทึกราคาไม่สำเร็จ: ${error instanceof Error ? error.message : "เกิดข้อผิดพลาด"}`,
+        true,
+      );
+    } finally {
+      setSavingRequest(false);
     }
-    if (decision === "STANDARD")
-      addPriceVersion(next, {
-        receiverId: request.receiverId,
-        senderId: request.senderId,
-        catalogId: request.catalogId,
-        payment: request.payment,
-        branch: request.branch,
-        price: approvedPrice!,
-        reason: note.trim() || `อนุมัติจากคำขอราคา ${request.billNumber}`,
-        effectiveFrom: request.requestedAt.slice(0, 10),
-        source: "PRICE_REQUEST",
-      });
-    commit(
-      next,
-      decision === "STANDARD"
-        ? "ยืนยันราคาและสร้างราคามาตรฐานแล้ว"
-        : decision === "BILL_ONLY"
-          ? "ยืนยันราคาเฉพาะบิลแล้ว ราคามาตรฐานไม่เปลี่ยน"
-          : decision === "RETURN"
-            ? "ส่งกลับให้ปลายทางแก้ราคาแล้ว"
-            : "บันทึกราคาแล้ว ส่งให้บัญชียืนยัน",
-    );
-    setResolving(null);
   }
 
   const activeRequest = resolving
@@ -764,12 +873,15 @@ export default function Pricing() {
     return (
       <div className="ops-page pricing-page">
         <PriceRequestDetail
+          key={`${activeRequest.id}:${activeRequest.status}`}
           request={activeRequest}
           recommendation={
             pendingRecommendations.get(activeRequest.id) ||
             buildPriceRecommendation(activeRequest, operations, registry)
           }
           registry={registry}
+          canReview={canReviewPriceRequest(w.profile.role)}
+          saving={savingRequest}
           onBack={() => setResolving(null)}
           onSave={savePriceRequest}
         />
@@ -844,7 +956,9 @@ export default function Pricing() {
         receiverOptions={receiverOptions}
         senderOptions={senderOptions}
         productOptions={productOptions}
+        unitOptions={unitOptions}
         pendingStatus={pendingStatus}
+        showAllRequests={showAllRequests}
         requestFrom={requestFrom}
         requestTo={requestTo}
         historyFrom={historyFrom}
@@ -854,6 +968,11 @@ export default function Pricing() {
         resultCount={filteredCount}
         onFilters={setFilters}
         onPendingStatus={setPendingStatus}
+        onShowAllRequests={(showAll) => {
+          setShowAllRequests(showAll);
+          if (!showAll && (pendingStatus === "RESOLVED" || pendingStatus === "CANCELLED"))
+            setPendingStatus("");
+        }}
         onRequestFrom={(date) => {
           setRequestFrom(date);
           if (requestTo && date > requestTo) setRequestTo("");
@@ -934,7 +1053,9 @@ function PriceFilterBar({
   receiverOptions,
   senderOptions,
   productOptions,
+  unitOptions,
   pendingStatus,
+  showAllRequests,
   requestFrom,
   requestTo,
   historyFrom,
@@ -944,6 +1065,7 @@ function PriceFilterBar({
   resultCount,
   onFilters,
   onPendingStatus,
+  onShowAllRequests,
   onRequestFrom,
   onRequestTo,
   onHistoryFrom,
@@ -956,7 +1078,9 @@ function PriceFilterBar({
   receiverOptions: FilterOption[];
   senderOptions: FilterOption[];
   productOptions: FilterOption[];
+  unitOptions: FilterOption[];
   pendingStatus: PriceRequest["status"] | "";
+  showAllRequests: boolean;
   requestFrom: string;
   requestTo: string;
   historyFrom: string;
@@ -966,6 +1090,7 @@ function PriceFilterBar({
   resultCount: number;
   onFilters: (filters: PriceFilters) => void;
   onPendingStatus: (status: PriceRequest["status"] | "") => void;
+  onShowAllRequests: (showAll: boolean) => void;
   onRequestFrom: (date: string) => void;
   onRequestTo: (date: string) => void;
   onHistoryFrom: (date: string) => void;
@@ -981,7 +1106,8 @@ function PriceFilterBar({
     filters.query ||
     filters.receiverId ||
     filters.senderId ||
-    filters.catalogId ||
+    filters.productId ||
+    filters.unit ||
     filters.payment ||
     filters.branch ||
     pendingStatus ||
@@ -989,7 +1115,8 @@ function PriceFilterBar({
     requestTo ||
     historyFrom ||
     historyTo ||
-    historyApprover,
+    historyApprover ||
+    showAllRequests,
   );
   return (
     <section className="pricing-filters" aria-label="ตัวกรองราคา">
@@ -1018,7 +1145,7 @@ function PriceFilterBar({
           value={filters.receiverId}
           options={receiverOptions}
           onChange={(receiverId) =>
-            patch({ receiverId, senderId: "", catalogId: "" })
+            patch({ receiverId, senderId: "", productId: "", unit: "" })
           }
         />
         <FilterPicker
@@ -1026,18 +1153,25 @@ function PriceFilterBar({
           emptyLabel="ผู้ส่งทั้งหมด"
           value={filters.senderId}
           options={senderOptions}
-          onChange={(senderId) => patch({ senderId, catalogId: "" })}
+          onChange={(senderId) => patch({ senderId, productId: "", unit: "" })}
         />
         <div className="pricing-filter-control">
-          <span>สินค้า / หน่วย</span>
+          <span>สินค้า</span>
           <SearchableSelect
-            ariaLabel="สินค้า / หน่วย"
-            value={filters.catalogId}
+            ariaLabel="สินค้า"
+            value={filters.productId}
             emptyLabel="สินค้าทั้งหมด"
             options={productOptions}
-            onChange={(catalogId) => patch({ catalogId })}
+            onChange={(productId) => patch({ productId, unit: "" })}
           />
         </div>
+        <FilterSelect
+          label="หน่วยนับ"
+          value={filters.unit}
+          emptyLabel="ทุกหน่วยนับ"
+          options={unitOptions}
+          onChange={(unit) => patch({ unit })}
+        />
         <FilterSelect
           label="ประเภทการชำระเงิน"
           value={filters.payment}
@@ -1059,7 +1193,13 @@ function PriceFilterBar({
             label: row.name,
           }))}
           onChange={(branch) =>
-            patch({ branch, receiverId: "", senderId: "", catalogId: "" })
+            patch({
+              branch,
+              receiverId: "",
+              senderId: "",
+              productId: "",
+              unit: "",
+            })
           }
         />
         {tab === "pending" && (
@@ -1078,6 +1218,12 @@ function PriceFilterBar({
                   label: requestStatusLabel.PENDING_APPROVAL,
                 },
                 { id: "RETURNED", label: requestStatusLabel.RETURNED },
+                ...(showAllRequests
+                  ? [
+                      { id: "RESOLVED", label: requestStatusLabel.RESOLVED },
+                      { id: "CANCELLED", label: requestStatusLabel.CANCELLED },
+                    ]
+                  : []),
               ]}
               onChange={(status) =>
                 onPendingStatus(status as PriceRequest["status"] | "")
@@ -1094,6 +1240,17 @@ function PriceFilterBar({
                 value={requestTo}
                 onChange={onRequestTo}
               />
+            </label>
+            <label className="pricing-filter-toggle">
+              <input
+                type="checkbox"
+                checked={showAllRequests}
+                onChange={(event) => onShowAllRequests(event.target.checked)}
+              />
+              <span>
+                <strong>แสดงรายการทั้งหมด</strong>
+                <small>รวมรายการที่มีราคาแล้วและรายการขอราคา</small>
+              </span>
             </label>
           </>
         )}
@@ -1341,7 +1498,7 @@ function PendingPrices({
             <th>สินค้า / หน่วย</th>
             <th>การชำระ / พื้นที่</th>
             <th>ราคาจากปลายทาง</th>
-            <th>ราคาแนะนำ / อ้างอิง</th>
+            <th>ราคาอนุมัติ / แนะนำ</th>
             <th />
           </tr>
         </thead>
@@ -1387,18 +1544,26 @@ function PendingPrices({
                   )}
                 </td>
                 <td>
-                  {recommendation.price === null ? (
+                  {row.approvedPrice !== null ? (
+                    <span className="price-number recommended">
+                      ฿ {money(row.approvedPrice)}
+                    </span>
+                  ) : recommendation.price === null ? (
                     <span className="price-muted">ต้องตรวจสอบ</span>
                   ) : (
                     <span className="price-number recommended">
                       ฿ {money(recommendation.price)}
                     </span>
                   )}
-                  <small
-                    className={`recommendation-confidence ${recommendation.confidence}`}
-                  >
-                    {recommendation.confidenceLabel}
-                  </small>
+                  {row.approvedPrice !== null ? (
+                    <small>ราคาที่อนุมัติแล้ว</small>
+                  ) : (
+                    <small
+                      className={`recommendation-confidence ${recommendation.confidence}`}
+                    >
+                      {recommendation.confidenceLabel}
+                    </small>
+                  )}
                   <small>
                     {recommendation.sourceLabel}
                     {recommendation.matchCount
@@ -1575,12 +1740,16 @@ function PriceRequestDetail({
   request,
   recommendation,
   registry,
+  canReview,
+  saving,
   onBack,
   onSave,
 }: {
   request: PriceRequest;
   recommendation: PriceRecommendation;
   registry: ReturnType<typeof loadIntakeRegistry>;
+  canReview: boolean;
+  saving: boolean;
   onBack: () => void;
   onSave: (
     proposedPrice: number | null,
@@ -1591,6 +1760,10 @@ function PriceRequestDetail({
   ) => void;
 }) {
   const awaitingApproval = request.status === "PENDING_APPROVAL";
+  const isClosed = request.status === "RESOLVED" || request.status === "CANCELLED";
+  const canEditProposal =
+    request.status === "PENDING_PRICE" || request.status === "RETURNED";
+  const canSubmitReview = awaitingApproval && canReview;
   const suggestedPrice = recommendation.price;
   const [proposedPrice, setProposedPrice] = useState(
     request.proposedPrice === null
@@ -1615,16 +1788,16 @@ function PriceRequestDetail({
   );
   const [decision, setDecision] = useState<
     "STANDARD" | "BILL_ONLY" | "SUBMIT" | "RETURN"
-  >(awaitingApproval ? "STANDARD" : "SUBMIT");
+  >(canSubmitReview ? "STANDARD" : "SUBMIT");
   const [reason, setReason] = useState("");
   const receiver = registry.parties.find(
     (party) => party.id === request.receiverId,
   );
-  const detailTitle = awaitingApproval
-    ? "บัญชียืนยันราคา"
+  const detailTitle = isClosed
+    ? "รายละเอียดราคา"
     : request.status === "RETURNED"
-      ? "แก้ราคาที่ถูกส่งกลับ"
-      : "ตรวจและระบุราคา";
+      ? "แก้ราคาเสนอและตรวจสอบ"
+      : "เสนอราคาและตรวจสอบ";
   return (
     <div className="price-request-detail-page">
       <Button className="price-detail-back" type="button" onClick={onBack}>
@@ -1752,57 +1925,39 @@ function PriceRequestDetail({
 
         <aside className="price-resolution-panel">
           <header>
-            <h2>{awaitingApproval ? "ผลการตรวจของบัญชี" : "ข้อมูลราคา"}</h2>
+            <h2>ข้อมูลราคา</h2>
             <p>
-              {awaitingApproval
-                ? "ตรวจราคาและเลือกว่าจะนำไปใช้ในระดับใด"
-                : "บันทึกราคาที่ปลายทางตรวจสอบแล้วเพื่อส่งให้บัญชียืนยัน"}
+              {isClosed
+                ? "รายการนี้ปิดการตรวจราคาแล้ว"
+                : canSubmitReview
+                  ? "ตรวจราคาเสนอและเลือกผลการตรวจของบัญชี"
+                  : awaitingApproval
+                    ? "ราคาเสนอถูกส่งแล้วและกำลังรอบัญชียืนยัน"
+                    : "บันทึกราคาเสนอเพื่อส่งให้บัญชียืนยัน"}
             </p>
           </header>
           <form
             className="ops-form price-resolution-form"
             onSubmit={(event) => {
               event.preventDefault();
+              if (saving || (!canEditProposal && !canSubmitReview)) return;
               onSave(
                 proposedPrice === "" ? null : Number(proposedPrice),
                 approvedPrice === "" ? null : Number(approvedPrice),
                 actualCollectedAmount === ""
                   ? null
                   : Number(actualCollectedAmount),
-                decision,
+                canSubmitReview ? decision : "SUBMIT",
                 reason,
               );
             }}
           >
-            {awaitingApproval ? (
-              <>
-                <div className="request-price-proposal">
-                  <span>ราคาที่เสนอ</span>
-                  <strong>
-                    {request.proposedPrice === null
-                      ? "ไม่ได้ระบุ"
-                      : `฿ ${money(request.proposedPrice)} / หน่วย`}
-                  </strong>
-                </div>
-                <Field
-                  label="ราคาที่อนุมัติ / หน่วย"
-                  required={decision !== "RETURN"}
-                >
-                  <input
-                    autoFocus
-                    required={decision !== "RETURN"}
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={approvedPrice}
-                    onChange={(event) => setApprovedPrice(event.target.value)}
-                  />
-                </Field>
-              </>
-            ) : (
-              <Field label="ราคาที่ปลายทางเสนอ / หน่วย (ไม่บังคับ)">
+            {canEditProposal ? (
+              <Field label="ราคาเสนอ / หน่วย" required>
                 <input
                   autoFocus
+                  required
+                  disabled={saving}
                   type="number"
                   min="0"
                   step="0.01"
@@ -1810,10 +1965,20 @@ function PriceRequestDetail({
                   onChange={(event) => setProposedPrice(event.target.value)}
                 />
               </Field>
+            ) : (
+              <div className="request-price-proposal">
+                <span>ราคาที่เสนอ</span>
+                <strong>
+                  {request.proposedPrice === null
+                    ? "ไม่ได้ระบุ"
+                    : `฿ ${money(request.proposedPrice)} / หน่วย`}
+                </strong>
+              </div>
             )}
-            {request.payment === "CASH_DESTINATION" && (
+            {request.payment === "CASH_DESTINATION" && canEditProposal && (
               <Field label="ยอดเงินที่เก็บได้จริง (ทั้งรายการ)">
                 <input
+                  disabled={saving}
                   type="number"
                   min="0"
                   step="0.01"
@@ -1824,8 +1989,24 @@ function PriceRequestDetail({
                 />
               </Field>
             )}
-            {awaitingApproval ? (
-              <fieldset className="price-decisions">
+            {canSubmitReview && (
+              <>
+                <Field
+                  label="ราคาที่อนุมัติ / หน่วย"
+                  required={decision !== "RETURN"}
+                >
+                  <input
+                    autoFocus
+                    required={decision !== "RETURN"}
+                    disabled={saving || decision === "RETURN"}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={approvedPrice}
+                    onChange={(event) => setApprovedPrice(event.target.value)}
+                  />
+                </Field>
+                <fieldset className="price-decisions" disabled={saving}>
                 <legend>ผลการตรวจของบัญชี</legend>
                 <label>
                   <input
@@ -1863,41 +2044,60 @@ function PriceRequestDetail({
                     <small>บิลยังคงสถานะรอราคา</small>
                   </span>
                 </label>
-              </fieldset>
-            ) : (
+                </fieldset>
+              </>
+            )}
+            {awaitingApproval && !canReview && (
+              <div className="ops-inline-note">
+                เฉพาะผู้ดูแลระบบ หัวหน้าบัญชี หรือเจ้าของเท่านั้นที่บันทึกผลการตรวจของบัญชีได้
+              </div>
+            )}
+            {canEditProposal && (
               <div className="ops-inline-note">
                 ราคานี้จะถูกส่งให้บัญชียืนยันก่อนนำไปคำนวณยอดบิล
               </div>
             )}
-            <Field
-              label={
-                decision === "RETURN"
-                  ? "เหตุผลที่ส่งกลับ"
-                  : "หมายเหตุ (ไม่บังคับ)"
-              }
-              required={decision === "RETURN"}
-            >
-              <textarea
+            {(canEditProposal || canSubmitReview) && (
+              <Field
+                label={
+                  decision === "RETURN"
+                    ? "เหตุผลที่ส่งกลับ"
+                    : "หมายเหตุ (ไม่บังคับ)"
+                }
                 required={decision === "RETURN"}
-                rows={3}
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-              />
-            </Field>
+              >
+                <textarea
+                  required={decision === "RETURN"}
+                  minLength={decision === "RETURN" ? 3 : undefined}
+                  disabled={saving}
+                  rows={3}
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                />
+              </Field>
+            )}
+            {isClosed && request.approvedPrice !== null && (
+              <div className="request-price-proposal approved">
+                <span>ราคาที่อนุมัติ</span>
+                <strong>฿ {money(request.approvedPrice)} / หน่วย</strong>
+              </div>
+            )}
             <div className="ops-form-actions">
-              <Button type="button" onClick={onBack}>
+              <Button type="button" disabled={saving} onClick={onBack}>
                 กลับไปตาราง
               </Button>
-              <Button type="submit" className="primary">
-                <CheckCircle2 size={16} />
-                {decision === "SUBMIT"
-                  ? proposedPrice === ""
-                    ? "ส่งให้ผู้จัดการกำหนดราคา"
-                    : "ส่งให้บัญชียืนยัน"
-                  : decision === "RETURN"
-                    ? "ส่งกลับแก้ไข"
-                    : "ยืนยันราคา"}
-              </Button>
+              {(canEditProposal || canSubmitReview) && (
+                <Button type="submit" className="primary" disabled={saving}>
+                  <CheckCircle2 size={16} />
+                  {saving
+                    ? "กำลังบันทึก..."
+                    : canEditProposal
+                      ? "บันทึกราคาเสนอ"
+                      : decision === "RETURN"
+                        ? "ส่งกลับแก้ไข"
+                        : "ยืนยันราคา"}
+                </Button>
+              )}
             </div>
           </form>
         </aside>
