@@ -1,8 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { pairRateKey } from "./intakeEntryData";
-import { mapRemoteWorkspace, sanitizeRemoteBillItems } from "./remoteWorkspace";
+import {
+  mapRemoteWorkspace,
+  remoteWorkspaceErrorMessage,
+  sanitizeRemoteBillItems,
+} from "./remoteWorkspace";
 
 describe("shared reception workspace", () => {
+  it("explains when the pricing RPC migration is missing", () => {
+    expect(
+      remoteWorkspaceErrorMessage({
+        code: "PGRST202",
+        message: "Could not find the function public.submit_price_proposal",
+      }),
+    ).toContain("migration ล่าสุด");
+    expect(
+      remoteWorkspaceErrorMessage({
+        code: "P0001",
+        message: "ไม่มีสิทธิ์ทำรายการนี้",
+      }),
+    ).toBe("ไม่มีสิทธิ์ทำรายการนี้");
+  });
+
   it("omits blank optional measurements from bill items", () => {
     const [blank, measured] = sanitizeRemoteBillItems([
       {

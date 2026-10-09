@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canReviewPriceRequest,
+  canSubmitPriceReview,
   isWithinPriceHistoryRange,
   isWithinPriceRequestRange,
   matchesPriceFilters,
@@ -54,8 +55,12 @@ describe("pricing filters", () => {
   });
 
   it("separates product and unit filters", () => {
-    expect(matchesPriceFilters({ ...filters, productId: "shoe" }, row)).toBe(true);
-    expect(matchesPriceFilters({ ...filters, productId: "bag" }, row)).toBe(false);
+    expect(matchesPriceFilters({ ...filters, productId: "shoe" }, row)).toBe(
+      true,
+    );
+    expect(matchesPriceFilters({ ...filters, productId: "bag" }, row)).toBe(
+      false,
+    );
     expect(matchesPriceFilters({ ...filters, unit: "กระสอบ" }, row)).toBe(true);
   });
 
@@ -65,6 +70,16 @@ describe("pricing filters", () => {
     expect(canReviewPriceRequest("accountant")).toBe(true);
     expect(canReviewPriceRequest("clerk")).toBe(false);
     expect(canReviewPriceRequest("viewer")).toBe(false);
+  });
+
+  it("shows the accounting result below an open proposal only to reviewers", () => {
+    expect(canSubmitPriceReview("owner", "PENDING_PRICE")).toBe(true);
+    expect(canSubmitPriceReview("admin", "RETURNED")).toBe(true);
+    expect(canSubmitPriceReview("accountant", "PENDING_APPROVAL")).toBe(true);
+    expect(canSubmitPriceReview("clerk", "PENDING_PRICE")).toBe(false);
+    expect(canSubmitPriceReview("viewer", "PENDING_APPROVAL")).toBe(false);
+    expect(canSubmitPriceReview("owner", "RESOLVED")).toBe(false);
+    expect(canSubmitPriceReview("admin", "CANCELLED")).toBe(false);
   });
 
   it("includes resolved and cancelled requests only when all rows are requested", () => {
@@ -87,7 +102,9 @@ describe("pricing filters", () => {
 
   it("filters bill dates inclusively in Bangkok time", () => {
     const openedAt = "2026-09-14T18:30:00.000Z";
-    expect(isWithinPriceRequestRange(openedAt, "2026-09-15", "2026-09-15")).toBe(true);
+    expect(
+      isWithinPriceRequestRange(openedAt, "2026-09-15", "2026-09-15"),
+    ).toBe(true);
     expect(isWithinPriceRequestRange(openedAt, "2026-09-16", "")).toBe(false);
     expect(isWithinPriceRequestRange(openedAt, "", "2026-09-14")).toBe(false);
   });

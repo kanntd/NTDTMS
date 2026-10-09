@@ -53,6 +53,7 @@ import {
   loadRemoteWorkspace,
   returnRemotePriceRequest,
   resolveRemotePriceRequest,
+  submitAndResolveRemotePriceRequest,
   submitRemotePriceProposal,
   syncRemoteWorkspace,
 } from "./remoteWorkspace";
@@ -156,6 +157,17 @@ export function matchesPriceFilters(
 
 export function canReviewPriceRequest(role: Role) {
   return role === "owner" || role === "admin" || role === "accountant";
+}
+
+export function canSubmitPriceReview(
+  role: Role,
+  status: PriceRequest["status"],
+) {
+  return (
+    canReviewPriceRequest(role) &&
+    status !== "RESOLVED" &&
+    status !== "CANCELLED"
+  );
 }
 
 export function shouldShowPriceRequest(
@@ -572,7 +584,10 @@ export default function Pricing() {
     ...new Map(
       scopedCatalog
         .filter((item) => item.productId)
-        .map((item) => [item.productId, { id: item.productId, label: item.name }]),
+        .map((item) => [
+          item.productId,
+          { id: item.productId, label: item.name },
+        ]),
     ).values(),
   ].sort((a, b) => a.label.localeCompare(b.label, "th"));
   const unitOptions = [
@@ -603,8 +618,7 @@ export default function Pricing() {
           productId: catalog?.productId || "",
           unit: catalog?.unit || "",
         },
-      ) &&
-      isDestinationBranch(row.branch, filters.branch, w.branches, w.zones)
+      ) && isDestinationBranch(row.branch, filters.branch, w.branches, w.zones)
     );
   };
   const currentRows = operations.agreements
@@ -759,12 +773,27 @@ export default function Pricing() {
           setResolving(null);
           return;
         }
-        const result = await resolveRemotePriceRequest(
-          requestId,
-          approvedPrice!,
-          decision,
-          note,
-        );
+        if (approvedPrice === null) throw new Error("กรุณาระบุราคาที่อนุมัติ");
+        const needsProposal =
+          resolving.status === "PENDING_PRICE" ||
+          resolving.status === "RETURNED";
+        if (needsProposal && proposedPrice === null)
+          throw new Error("กรุณาระบุราคาเสนอ");
+        const result = needsProposal
+          ? await submitAndResolveRemotePriceRequest(
+              requestId,
+              proposedPrice!,
+              approvedPrice,
+              actualCollectedAmount,
+              decision,
+              note,
+            )
+          : await resolveRemotePriceRequest(
+              requestId,
+              approvedPrice,
+              decision,
+              note,
+            );
         const workspace = await loadRemoteWorkspace();
         setRegistry(workspace.registry);
         setOperations(workspace.operations);
@@ -796,6 +825,18 @@ export default function Pricing() {
         request.returnedBy = "ผู้ดูแล NTD";
         request.returnReason = note;
       } else {
+        if (
+          request.status === "PENDING_PRICE" ||
+          request.status === "RETURNED"
+        ) {
+          if (proposedPrice === null) throw new Error("กรุณาระบุราคาเสนอ");
+          request.proposedPrice = proposedPrice;
+          request.actualCollectedAmount = actualCollectedAmount;
+          request.note = note;
+          request.submittedAt = timestamp;
+          request.submittedBy = "ผู้ให้ข้อมูลราคา";
+          request.returnReason = undefined;
+        }
         const finalPrice = approvedPrice!;
         request.approvedPrice = finalPrice;
         request.approvalNote = note;
@@ -880,7 +921,7 @@ export default function Pricing() {
             buildPriceRecommendation(activeRequest, operations, registry)
           }
           registry={registry}
-          canReview={canReviewPriceRequest(w.profile.role)}
+          canReview={canSubmitPriceReview(w.profile.role, activeRequest.status)}
           saving={savingRequest}
           onBack={() => setResolving(null)}
           onSave={savePriceRequest}
@@ -970,7 +1011,10 @@ export default function Pricing() {
         onPendingStatus={setPendingStatus}
         onShowAllRequests={(showAll) => {
           setShowAllRequests(showAll);
-          if (!showAll && (pendingStatus === "RESOLVED" || pendingStatus === "CANCELLED"))
+          if (
+            !showAll &&
+            (pendingStatus === "RESOLVED" || pendingStatus === "CANCELLED")
+          )
             setPendingStatus("");
         }}
         onRequestFrom={(date) => {
@@ -1760,10 +1804,11 @@ function PriceRequestDetail({
   ) => void;
 }) {
   const awaitingApproval = request.status === "PENDING_APPROVAL";
-  const isClosed = request.status === "RESOLVED" || request.status === "CANCELLED";
+  const isClosed =
+    request.status === "RESOLVED" || request.status === "CANCELLED";
   const canEditProposal =
     request.status === "PENDING_PRICE" || request.status === "RETURNED";
-  const canSubmitReview = awaitingApproval && canReview;
+  const canSubmitReview = canReview && !isClosed;
   const suggestedPrice = recommendation.price;
   const [proposedPrice, setProposedPrice] = useState(
     request.proposedPrice === null
@@ -1962,7 +2007,15 @@ function PriceRequestDetail({
                   min="0"
                   step="0.01"
                   value={proposedPrice}
-                  onChange={(event) => setProposedPrice(event.target.value)}
+                  onChange={(event) => {
+                    const nextPrice = event.target.value;
+                    if (
+                      canSubmitReview &&
+                      (approvedPrice === "" || approvedPrice === proposedPrice)
+                    )
+                      setApprovedPrice(nextPrice);
+                    setProposedPrice(nextPrice);
+                  }}
                 />
               </Field>
             ) : (
@@ -2007,54 +2060,62 @@ function PriceRequestDetail({
                   />
                 </Field>
                 <fieldset className="price-decisions" disabled={saving}>
-                <legend>ผลการตรวจของบัญชี</legend>
-                <label>
-                  <input
-                    type="radio"
-                    name="decision"
-                    checked={decision === "STANDARD"}
-                    onChange={() => setDecision("STANDARD")}
-                  />
-                  <span>
-                    <strong>ยืนยันและใช้เป็นราคามาตรฐาน</strong>
-                    <small>บิลครั้งต่อไปจะขึ้นราคานี้อัตโนมัติ</small>
-                  </span>
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="decision"
-                    checked={decision === "BILL_ONLY"}
-                    onChange={() => setDecision("BILL_ONLY")}
-                  />
-                  <span>
-                    <strong>ยืนยันใช้เฉพาะบิลนี้</strong>
-                    <small>ไม่เปลี่ยนราคามาตรฐาน</small>
-                  </span>
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="decision"
-                    checked={decision === "RETURN"}
-                    onChange={() => setDecision("RETURN")}
-                  />
-                  <span>
-                    <strong>ส่งกลับให้ปลายทางแก้ไข</strong>
-                    <small>บิลยังคงสถานะรอราคา</small>
-                  </span>
-                </label>
+                  <legend>ผลการตรวจของบัญชี</legend>
+                  <label>
+                    <input
+                      type="radio"
+                      name="decision"
+                      checked={decision === "STANDARD"}
+                      onChange={() => setDecision("STANDARD")}
+                    />
+                    <span>
+                      <strong>ยืนยันและใช้เป็นราคามาตรฐาน</strong>
+                      <small>บิลครั้งต่อไปจะขึ้นราคานี้อัตโนมัติ</small>
+                    </span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="decision"
+                      checked={decision === "BILL_ONLY"}
+                      onChange={() => setDecision("BILL_ONLY")}
+                    />
+                    <span>
+                      <strong>ยืนยันใช้เฉพาะบิลนี้</strong>
+                      <small>ไม่เปลี่ยนราคามาตรฐาน</small>
+                    </span>
+                  </label>
+                  {awaitingApproval && (
+                    <label>
+                      <input
+                        type="radio"
+                        name="decision"
+                        checked={decision === "RETURN"}
+                        onChange={() => setDecision("RETURN")}
+                      />
+                      <span>
+                        <strong>ส่งกลับให้ปลายทางแก้ไข</strong>
+                        <small>บิลยังคงสถานะรอราคา</small>
+                      </span>
+                    </label>
+                  )}
                 </fieldset>
               </>
             )}
             {awaitingApproval && !canReview && (
               <div className="ops-inline-note">
-                เฉพาะผู้ดูแลระบบ หัวหน้าบัญชี หรือเจ้าของเท่านั้นที่บันทึกผลการตรวจของบัญชีได้
+                เฉพาะผู้ดูแลระบบ หัวหน้าบัญชี
+                หรือเจ้าของเท่านั้นที่บันทึกผลการตรวจของบัญชีได้
               </div>
             )}
-            {canEditProposal && (
+            {canEditProposal && !canSubmitReview && (
               <div className="ops-inline-note">
                 ราคานี้จะถูกส่งให้บัญชียืนยันก่อนนำไปคำนวณยอดบิล
+              </div>
+            )}
+            {canEditProposal && canSubmitReview && (
+              <div className="ops-inline-note">
+                คุณมีสิทธิ์บันทึกราคาเสนอและยืนยันราคาในขั้นตอนเดียว
               </div>
             )}
             {(canEditProposal || canSubmitReview) && (
@@ -2091,11 +2152,11 @@ function PriceRequestDetail({
                   <CheckCircle2 size={16} />
                   {saving
                     ? "กำลังบันทึก..."
-                    : canEditProposal
-                      ? "บันทึกราคาเสนอ"
-                      : decision === "RETURN"
+                    : canSubmitReview
+                      ? decision === "RETURN"
                         ? "ส่งกลับแก้ไข"
-                        : "ยืนยันราคา"}
+                        : "ยืนยันราคา"
+                      : "บันทึกราคาเสนอ"}
                 </Button>
               )}
             </div>
