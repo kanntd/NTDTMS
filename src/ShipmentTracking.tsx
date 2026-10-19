@@ -28,6 +28,7 @@ import {
 import { loadIntakeRegistry } from "./intakeRegistry";
 import { loadOperations } from "./operationsStore";
 import { loadRemoteWorkspace } from "./remoteWorkspace";
+import { SORT_ALL, SORT_ALL_LABEL, type ListSort } from "./listSort";
 import Receipt from "./Receipt";
 import ShipmentEditModal from "./ShipmentEditModal";
 import {
@@ -88,6 +89,7 @@ export default function ShipmentTracking({
     ...emptyFilters,
     query: initialSearch,
   });
+  const [sort, setSort] = useState<ListSort | "">("");
   const [registry, setRegistry] = useState(loadIntakeRegistry);
   const [operations, setOperations] = useState(loadOperations);
   const [page, setPage] = useState(0);
@@ -151,6 +153,7 @@ export default function ShipmentTracking({
           paymentState: filters.paymentState,
           page,
           pageSize: PAGE_SIZE,
+          sort: sort || undefined,
         })
         .then((result) => {
           if (!active) return;
@@ -166,7 +169,7 @@ export default function ShipmentTracking({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [filters, page, selectedBranchAliases, w.revision, w.service]);
+  }, [filters, page, sort, selectedBranchAliases, w.revision, w.service]);
 
   const receiverOptions = useMemo(
     () =>
@@ -259,7 +262,7 @@ export default function ShipmentTracking({
     [w.zones],
   );
 
-  const hasFilters = Object.values(filters).some(Boolean);
+  const hasFilters = Object.values(filters).some(Boolean) || !!sort;
   const patch = (next: Partial<Filters>) => {
     setFilters((current) => ({ ...current, ...next }));
     setPage(0);
@@ -370,6 +373,7 @@ export default function ShipmentTracking({
               disabled={!hasFilters}
               onClick={() => {
                 setFilters(emptyFilters);
+                setSort("");
                 setPage(0);
               }}
             >
@@ -397,31 +401,83 @@ export default function ShipmentTracking({
           />
           <FilterPicker
             label="ผู้รับ"
-            value={filters.receiverId}
+            value={filters.receiverId || (sort === "RECEIVER" ? SORT_ALL : "")}
             emptyLabel="ผู้รับทั้งหมด"
-            options={receiverOptions}
-            onChange={(receiverId) => patch({ receiverId })}
+            options={[
+              { id: SORT_ALL, label: SORT_ALL_LABEL },
+              ...receiverOptions,
+            ]}
+            onChange={(receiverId) => {
+              patch({ receiverId: receiverId === SORT_ALL ? "" : receiverId });
+              setSort(
+                receiverId === SORT_ALL
+                  ? "RECEIVER"
+                  : sort === "RECEIVER"
+                    ? ""
+                    : sort,
+              );
+            }}
           />
           <FilterPicker
             label="ผู้ส่ง"
-            value={filters.senderId}
+            value={filters.senderId || (sort === "SENDER" ? SORT_ALL : "")}
             emptyLabel="ผู้ส่งทั้งหมด"
-            options={senderOptions}
-            onChange={(senderId) => patch({ senderId })}
+            options={[
+              { id: SORT_ALL, label: SORT_ALL_LABEL },
+              ...senderOptions,
+            ]}
+            onChange={(senderId) => {
+              patch({ senderId: senderId === SORT_ALL ? "" : senderId });
+              setSort(
+                senderId === SORT_ALL
+                  ? "SENDER"
+                  : sort === "SENDER"
+                    ? ""
+                    : sort,
+              );
+            }}
           />
           <FilterPicker
             label="สินค้า / หน่วย"
-            value={filters.catalogId}
+            value={filters.catalogId || (sort === "PRODUCT" ? SORT_ALL : "")}
             emptyLabel="สินค้าทั้งหมด"
-            options={productOptions}
-            onChange={(catalogId) => patch({ catalogId })}
+            options={[
+              { id: SORT_ALL, label: SORT_ALL_LABEL },
+              ...productOptions,
+            ]}
+            onChange={(catalogId) => {
+              patch({ catalogId: catalogId === SORT_ALL ? "" : catalogId });
+              setSort(
+                catalogId === SORT_ALL
+                  ? "PRODUCT"
+                  : sort === "PRODUCT"
+                    ? ""
+                    : sort,
+              );
+            }}
           />
           <FilterSelect
             label="หน่วยนับ"
-            value={filters.unit}
+            value={filters.unit || (sort === "UNIT" ? SORT_ALL : "")}
             emptyLabel="ทุกหน่วย"
-            options={unitOptions}
-            onChange={(unit) => patch({ unit })}
+            options={[{ id: SORT_ALL, label: SORT_ALL_LABEL }, ...unitOptions]}
+            onChange={(unit) => {
+              patch({ unit: unit === SORT_ALL ? "" : unit });
+              setSort(unit === SORT_ALL ? "UNIT" : sort === "UNIT" ? "" : sort);
+            }}
+          />
+          <FilterSelect
+            label="เรียงราคา"
+            value={sort === "PRICE_ASC" || sort === "PRICE_DESC" ? sort : ""}
+            emptyLabel="ตามลำดับเดิม"
+            options={[
+              { id: "PRICE_ASC", label: "ต่ำ-สูง" },
+              { id: "PRICE_DESC", label: "สูง-ต่ำ" },
+            ]}
+            onChange={(value) => {
+              setSort(value as ListSort | "");
+              setPage(0);
+            }}
           />
           <FilterSelect
             label="ประเภทการชำระเงิน"

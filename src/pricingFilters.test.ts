@@ -5,6 +5,7 @@ import {
   isWithinPriceHistoryRange,
   isWithinPriceRequestRange,
   matchesPriceFilters,
+  sortPriceRows,
   shouldShowPriceRequest,
 } from "./Pricing";
 
@@ -16,6 +17,8 @@ const row = {
   unit: "กระสอบ",
   payment: "CREDIT_DESTINATION" as const,
   branch: "STI",
+  province: "พิษณุโลก",
+  district: "เมืองพิษณุโลก",
 };
 
 const filters = {
@@ -26,6 +29,8 @@ const filters = {
   unit: "",
   payment: "" as const,
   branch: "",
+  province: "",
+  district: "",
 };
 
 describe("pricing filters", () => {
@@ -62,6 +67,66 @@ describe("pricing filters", () => {
       false,
     );
     expect(matchesPriceFilters({ ...filters, unit: "กระสอบ" }, row)).toBe(true);
+  });
+
+  it("keeps credit-origin comparisons inside the selected province and district", () => {
+    const selected = {
+      ...filters,
+      payment: "CREDIT_ORIGIN" as const,
+      province: "พิษณุโลก",
+      district: "เมืองพิษณุโลก",
+    };
+    const creditRow = { ...row, payment: "CREDIT_ORIGIN" as const };
+    expect(matchesPriceFilters(selected, creditRow)).toBe(true);
+    expect(
+      matchesPriceFilters(selected, { ...creditRow, district: "วังทอง" }),
+    ).toBe(false);
+    expect(
+      matchesPriceFilters(selected, { ...creditRow, province: "สุโขทัย" }),
+    ).toBe(false);
+    expect(matchesPriceFilters(selected, row)).toBe(false);
+  });
+
+  it("sorts the same product and unit together across senders", () => {
+    const prices = [
+      { ...row, id: "z", catalogId: "bag", senderId: "sender-b" },
+      { ...row, id: "b", catalogId: "snack", senderId: "sender-b" },
+      { ...row, id: "a", catalogId: "snack", senderId: "sender-a" },
+    ];
+    const catalog = [
+      { id: "bag", productId: "bag", name: "ถุงพลาสติก", unit: "ห่อ" },
+      { id: "snack", productId: "snack", name: "ขนมไก่ย่าง", unit: "มัด" },
+    ];
+    const parties = [
+      { id: "sender-a", display_name: "ก" },
+      { id: "sender-b", display_name: "ข" },
+    ];
+    expect(
+      sortPriceRows(
+        prices,
+        catalog,
+        parties as Parameters<typeof sortPriceRows>[2],
+      ).map((price) => price.id),
+    ).toEqual(["a", "b", "z"]);
+    const amounts: Record<string, number> = { z: 30, b: 50, a: 40 };
+    expect(
+      sortPriceRows(
+        prices,
+        catalog,
+        parties as Parameters<typeof sortPriceRows>[2],
+        "PRICE_ASC",
+        (price) => amounts[price.id],
+      ).map((price) => price.id),
+    ).toEqual(["z", "a", "b"]);
+    expect(
+      sortPriceRows(
+        prices,
+        catalog,
+        parties as Parameters<typeof sortPriceRows>[2],
+        "PRICE_DESC",
+        (price) => amounts[price.id],
+      ).map((price) => price.id),
+    ).toEqual(["b", "a", "z"]);
   });
 
   it("allows only accounting reviewers to record an accounting result", () => {
