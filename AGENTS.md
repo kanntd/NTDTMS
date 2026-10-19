@@ -54,4 +54,5 @@ Cloudflare Pages production rules:
 - The production Cloudflare Pages project is `ntdtms`.
 - Never create a second Pages project for a task or computer.
 - The user's primary review URL is `https://ntdtms.pages.dev/`. When a deployment is requested, complete and verify it there; do not present a branch preview URL as the finished site unless the user explicitly requests a preview.
+- For pricing UI changes, show local screenshots of every affected tab with representative demo data and incorporate feedback before merging to `main`. Do not use the production URL as a design preview.
 - After a production merge, verify `https://ntdtms.pages.dev` and report the deployed commit and health check result.
