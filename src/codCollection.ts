@@ -56,6 +56,10 @@ export function codCollectionStatus(
   return shipment.paid_amount > 0 ? "PARTIAL" : "PENDING";
 }
 
+export function outstandingCodBills(shipments: Shipment[]) {
+  return shipments.filter((row) => row.outstanding_amount > 0);
+}
+
 export function compareBillNumbers(a: string, b: string) {
   return a.localeCompare(b, "th", { numeric: true, sensitivity: "base" });
 }

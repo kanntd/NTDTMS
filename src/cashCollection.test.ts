@@ -5,6 +5,7 @@ import {
   compareBillNumbers,
   matchesCodDeliveryFilter,
   matchingBills,
+  outstandingCodBills,
   withRecordedDeliveryDates,
 } from "./codCollection";
 import type { Shipment } from "./types";
@@ -154,5 +155,34 @@ describe("COD collection model", () => {
     expect(matchesCodDeliveryFilter(notSent, "NOT_SENT")).toBe(true);
     expect(matchesCodDeliveryFilter(notSent, "SENT")).toBe(false);
     expect(matchesCodDeliveryFilter(sent, "", "2026-09-28")).toBe(false);
+  });
+
+  it("keeps old unpaid bills available while hiding fully collected bills", () => {
+    const rows = [
+      shipment({
+        id: "old-unpaid",
+        shipment_no: "B0125000018",
+        received_at: "2025-10-19T03:00:00.000Z",
+        paid_amount: 500,
+        outstanding_amount: 500,
+      }),
+      shipment({
+        id: "current-paid",
+        shipment_no: "B0126000018",
+        paid_amount: 1000,
+        outstanding_amount: 0,
+      }),
+      shipment({ id: "other-sequence", shipment_no: "B0126000118" }),
+    ];
+    expect(outstandingCodBills(rows).map((row) => row.id)).toEqual([
+      "old-unpaid",
+      "other-sequence",
+    ]);
+    expect(
+      outstandingCodBills(matchingBills(rows, "18")).map((row) => row.id),
+    ).toEqual(["old-unpaid"]);
+    expect(outstandingCodBills(matchingBills(rows, "B0126000018"))).toEqual(
+      [],
+    );
   });
 });

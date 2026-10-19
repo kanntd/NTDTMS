@@ -21,6 +21,7 @@ import {
   dateKey,
   matchesCodDeliveryFilter,
   matchingBills,
+  outstandingCodBills,
   withRecordedDeliveryDates,
   type CodDeliveryFilter,
   type CodCollectionStatus,
@@ -149,7 +150,11 @@ export default function CashCollection() {
       setRows(datedRows);
       setPayments(nextPayments);
       setSelected((current) =>
-        current ? datedRows.find((row) => row.id === current.id) || null : null,
+        current
+          ? datedRows.find(
+              (row) => row.id === current.id && row.outstanding_amount > 0,
+            ) || null
+          : null,
       );
       setFailure("");
       loadedOnce.current = true;
@@ -187,11 +192,12 @@ export default function CashCollection() {
     () => buildCodSummary(rows, payments),
     [rows, payments],
   );
+  const openRows = useMemo(() => outstandingCodBills(rows), [rows]);
   const receiverOptions = useMemo(
     () =>
       [
         ...new Map(
-          rows
+          openRows
             .filter((row) =>
               isDestinationBranch(
                 row.destination_branch_code,
@@ -206,7 +212,7 @@ export default function CashCollection() {
             ]),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [branch, rows, w.branches, w.zones],
+    [branch, openRows, w.branches, w.zones],
   );
   useEffect(() => {
     if (receiver && !receiverOptions.some(([id]) => id === receiver)) {
@@ -218,16 +224,19 @@ export default function CashCollection() {
     () =>
       [
         ...new Map(
-          rows.map((row) => [senderKey(row), row.sender_snapshot.display_name]),
+          openRows.map((row) => [
+            senderKey(row),
+            row.sender_snapshot.display_name,
+          ]),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [rows],
+    [openRows],
   );
   const productOptions = useMemo(
     () =>
       [
         ...new Map(
-          rows.flatMap((row) =>
+          openRows.flatMap((row) =>
             (row.items || []).map((item) => [
               item.product_id,
               `${item.description} / ${item.unit}`,
@@ -235,31 +244,31 @@ export default function CashCollection() {
           ),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [rows],
+    [openRows],
   );
   const unitOptions = useMemo(
     () =>
       [
         ...new Set(
-          rows.flatMap((row) => (row.items || []).map((item) => item.unit)),
+          openRows.flatMap((row) => (row.items || []).map((item) => item.unit)),
         ),
       ]
         .filter(Boolean)
         .sort((a, b) => a.localeCompare(b, "th")),
-    [rows],
+    [openRows],
   );
   const districtOptions = useMemo(
     () =>
       [
         ...new Map(
-          rows
+          openRows
             .map(
               (row) => [row.district_id, row.district_name] as [string, string],
             )
             .filter(([id]) => Boolean(id)),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [rows],
+    [openRows],
   );
   const branchOptions = useMemo(
     () => destinationBranches(w.branches, w.zones),
@@ -267,10 +276,10 @@ export default function CashCollection() {
   );
   const vehicleOptions = useMemo(
     () =>
-      [...new Set(rows.map((row) => row.vehicle_plate_no).filter(Boolean))]
+      [...new Set(openRows.map((row) => row.vehicle_plate_no).filter(Boolean))]
         .map(String)
         .sort((a, b) => a.localeCompare(b, "th", { numeric: true })),
-    [rows],
+    [openRows],
   );
   const collectedToday = useMemo(() => {
     const today = localDate();
@@ -284,7 +293,7 @@ export default function CashCollection() {
   }, [payments]);
   const visible = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("th");
-    return rows
+    return openRows
       .filter((row) =>
         matchesCodDeliveryFilter(row, deliveryState, deliveryFrom, deliveryTo),
       )
@@ -369,7 +378,7 @@ export default function CashCollection() {
     priceState,
     query,
     receiver,
-    rows,
+    openRows,
     sender,
     sort,
     unit,
@@ -416,9 +425,15 @@ export default function CashCollection() {
 
   function findBill() {
     setMatchingIds([]);
-    const matches = matchingBills(rows, invoice);
+    const allMatches = matchingBills(rows, invoice);
+    const matches = outstandingCodBills(allMatches);
     if (!matches.length) {
-      w.toast(`ไม่พบบิล ${invoice.trim() || "ที่ระบุ"} ในรายการ COD`, true);
+      w.toast(
+        allMatches.length
+          ? `บิล ${invoice.trim()} เก็บเงินครบแล้ว`
+          : `ไม่พบบิล ${invoice.trim() || "ที่ระบุ"} ในรายการ COD`,
+        true,
+      );
       invoiceRef.current?.select();
       return;
     }
