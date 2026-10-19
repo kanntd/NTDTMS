@@ -767,6 +767,9 @@
   margin: 0 auto;
   color: #243d37;
 }
+.pricing-page {
+  max-width: 1800px;
+}
 .ops-heading {
   display: flex;
   align-items: flex-start;
@@ -1534,6 +1537,13 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.pricing-table {
+  min-width: 1220px;
+}
+.price-history-table,
+.batch-price-table {
+  min-width: 1420px;
+}
 .request-status {
   display: inline-flex;
   align-items: center;
@@ -1572,10 +1582,14 @@
   margin-top: 16px;
 }
 .pending-price-table {
-  min-width: 1050px;
+  min-width: 1750px;
 }
 .pending-price-table td {
   max-width: 240px;
+}
+.pending-price-table th:nth-child(13),
+.pending-price-table td:nth-child(13) {
+  min-width: 190px;
 }
 .pending-price-table th:last-child,
 .pending-price-table td:last-child {
@@ -1601,16 +1615,16 @@
 .recommendation-confidence {
   font-weight: 600;
 }
-.recommendation-confidence.high {
+.recommendation-confidence.confidence-high {
   color: #087555;
 }
-.recommendation-confidence.medium {
+.recommendation-confidence.confidence-medium {
   color: #846015;
 }
-.recommendation-confidence.review {
+.recommendation-confidence.confidence-review {
   color: #a33a3a;
 }
-.recommendation-confidence.empty {
+.recommendation-confidence.confidence-empty {
   color: #77867e;
 }
 .pending-detail-button {
@@ -1943,16 +1957,26 @@
 }
 .batch-layout {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
   padding-top: 20px;
   align-items: start;
 }
 .batch-controls {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  padding-right: 22px;
-  border-right: 1px solid #d9e2dd;
+  align-items: end;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #d9e2dd;
+}
+.batch-controls h2,
+.batch-filter-status {
+  grid-column: 1 / -1;
+}
+.batch-controls > .full {
+  grid-column: 1 / -1;
+  max-width: 360px;
 }
 .batch-controls .full {
   width: 100%;
@@ -2016,10 +2040,9 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .batch-controls {
+    grid-template-columns: minmax(0, 1fr);
     max-width: 520px;
-    padding: 0 0 20px;
-    border-right: 0;
-    border-bottom: 1px solid #d9e2dd;
+    padding-bottom: 20px;
   }
   .pricing-filter-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));

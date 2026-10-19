@@ -1212,6 +1212,7 @@ export default function Pricing() {
         <PendingPrices
           rows={pendingRows}
           recommendations={pendingRecommendations}
+          operations={operations}
           registry={registry}
           onResolve={setResolving}
         />
@@ -1727,6 +1728,46 @@ function FilterPicker({
   );
 }
 
+function PriceIdentityHeaders() {
+  return (
+    <>
+      <th>ผู้ส่ง</th>
+      <th>ผู้รับ</th>
+      <th>จังหวัด</th>
+      <th>อำเภอ</th>
+      <th>การชำระเงิน</th>
+      <th>สินค้า</th>
+      <th>หน่วย</th>
+    </>
+  );
+}
+
+function PriceIdentityCells({
+  row,
+  registry,
+}: {
+  row: PriceDimensions;
+  registry: ReturnType<typeof loadIntakeRegistry>;
+}) {
+  const receiver = registry.parties.find(
+    (party) => party.id === row.receiverId,
+  );
+  const catalog = registry.catalog.find((item) => item.id === row.catalogId);
+  return (
+    <>
+      <td>{partyName(registry.parties, row.senderId)}</td>
+      <td>
+        <strong>{partyName(registry.parties, row.receiverId)}</strong>
+      </td>
+      <td>{receiver?.province || "–"}</td>
+      <td>{receiver?.district || "–"}</td>
+      <td>{PAYMENT_LABELS[row.payment]}</td>
+      <td>{catalog?.name || "ไม่พบสินค้า"}</td>
+      <td>{catalog?.unit || "–"}</td>
+    </>
+  );
+}
+
 function CurrentPrices({
   rows,
   operations,
@@ -1744,13 +1785,7 @@ function CurrentPrices({
         <thead>
           <tr>
             <th>ลำดับ</th>
-            <th>ผู้ส่ง</th>
-            <th>ผู้รับ</th>
-            <th>จังหวัด</th>
-            <th>อำเภอ</th>
-            <th>การชำระเงิน</th>
-            <th>สินค้า</th>
-            <th>หน่วย</th>
+            <PriceIdentityHeaders />
             <th>ราคา</th>
             <th>เวอร์ชัน</th>
             <th>จัดการ</th>
@@ -1761,24 +1796,10 @@ function CurrentPrices({
             const version = operations.priceVersions.find(
               (item) => item.id === row.currentVersionId,
             );
-            const receiver = registry.parties.find(
-              (party) => party.id === row.receiverId,
-            );
-            const catalog = registry.catalog.find(
-              (item) => item.id === row.catalogId,
-            );
             return (
               <tr key={row.id}>
                 <td>{index + 1}</td>
-                <td>{partyName(registry.parties, row.senderId)}</td>
-                <td>
-                  <strong>{partyName(registry.parties, row.receiverId)}</strong>
-                </td>
-                <td>{receiver?.province || "–"}</td>
-                <td>{receiver?.district || "–"}</td>
-                <td>{PAYMENT_LABELS[row.payment]}</td>
-                <td>{catalog?.name || "ไม่พบสินค้า"}</td>
-                <td>{catalog?.unit || "–"}</td>
+                <PriceIdentityCells row={row} registry={registry} />
                 <td className="price-number">฿ {money(version?.price || 0)}</td>
                 <td>
                   v{version?.version}
@@ -1809,14 +1830,22 @@ function CurrentPrices({
 function PendingPrices({
   rows,
   recommendations,
+  operations,
   registry,
   onResolve,
 }: {
   rows: PriceRequest[];
   recommendations: Map<string, PriceRecommendation>;
+  operations: OperationsState;
   registry: ReturnType<typeof loadIntakeRegistry>;
   onResolve: (row: PriceRequest) => void;
 }) {
+  const agreementByKey = new Map(
+    operations.agreements.map((agreement) => [agreement.key, agreement]),
+  );
+  const versionById = new Map(
+    operations.priceVersions.map((version) => [version.id, version]),
+  );
   if (!rows.length)
     return (
       <Empty title="ไม่มีรายการรอตรวจราคา">
@@ -1825,48 +1854,30 @@ function PendingPrices({
     );
   return (
     <div className="ops-table-wrap pending-price-table-wrap">
-      <table className="ops-table pending-price-table">
+      <table className="ops-table pricing-table pending-price-table">
         <thead>
           <tr>
+            <th>ลำดับ</th>
+            <PriceIdentityHeaders />
+            <th>ราคา</th>
+            <th>เวอร์ชัน</th>
             <th>สถานะ</th>
             <th>เลขบิล</th>
-            <th>ผู้รับ / ผู้ส่ง</th>
-            <th>สินค้า / หน่วย</th>
-            <th>การชำระ / พื้นที่</th>
-            <th>ราคาจากปลายทาง</th>
             <th>ราคาอนุมัติ / แนะนำ</th>
-            <th />
+            <th>จัดการ</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
+          {rows.map((row, index) => {
             const recommendation = recommendations.get(row.id)!;
-            const receiver = registry.parties.find(
-              (party) => party.id === row.receiverId,
-            );
+            const agreement = agreementByKey.get(row.key);
+            const version = agreement?.currentVersionId
+              ? versionById.get(agreement.currentVersionId)
+              : null;
             return (
               <tr key={row.id}>
-                <td>
-                  <span
-                    className={`request-status ${row.status.toLowerCase()}`}
-                  >
-                    {requestStatusLabel[row.status]}
-                  </span>
-                  {row.returnReason && <small>{row.returnReason}</small>}
-                </td>
-                <td>
-                  <strong>{row.billNumber || "ยังไม่ออกเลข"}</strong>
-                  <small>{thaiDate(row.requestedAt)}</small>
-                </td>
-                <td>
-                  <strong>{partyName(registry.parties, row.receiverId)}</strong>
-                  <small>{partyName(registry.parties, row.senderId)}</small>
-                </td>
-                <td>{catalogName(registry.catalog, row.catalogId)}</td>
-                <td>
-                  {PAYMENT_LABELS[row.payment]}
-                  <small>{receiver?.district || branchLabel(row.branch)}</small>
-                </td>
+                <td>{index + 1}</td>
+                <PriceIdentityCells row={row} registry={registry} />
                 <td>
                   {row.proposedPrice === null ? (
                     <span className="price-muted">ยังไม่ระบุ</span>
@@ -1878,6 +1889,19 @@ function PendingPrices({
                   {row.actualCollectedAmount !== null && (
                     <small>เก็บจริง ฿ {money(row.actualCollectedAmount)}</small>
                   )}
+                </td>
+                <td>{version ? `v${version.version}` : "–"}</td>
+                <td>
+                  <span
+                    className={`request-status ${row.status.toLowerCase()}`}
+                  >
+                    {requestStatusLabel[row.status]}
+                  </span>
+                  {row.returnReason && <small>{row.returnReason}</small>}
+                </td>
+                <td>
+                  <strong>{row.billNumber || "ยังไม่ออกเลข"}</strong>
+                  <small>{thaiDate(row.requestedAt)}</small>
                 </td>
                 <td>
                   {row.approvedPrice !== null ? (
@@ -1895,7 +1919,7 @@ function PendingPrices({
                     <small>ราคาที่อนุมัติแล้ว</small>
                   ) : (
                     <small
-                      className={`recommendation-confidence ${recommendation.confidence}`}
+                      className={`recommendation-confidence confidence-${recommendation.confidence}`}
                     >
                       {recommendation.confidenceLabel}
                     </small>
@@ -1934,46 +1958,35 @@ function PriceHistory({
   operations: OperationsState;
   registry: ReturnType<typeof loadIntakeRegistry>;
 }) {
+  const agreementById = new Map(
+    operations.agreements.map((agreement) => [agreement.id, agreement]),
+  );
   return (
     <div className="ops-table-wrap">
-      <table className="ops-table">
+      <table className="ops-table pricing-table price-history-table">
         <thead>
           <tr>
-            <th>วันที่</th>
-            <th>ผู้รับ / ผู้ส่ง</th>
-            <th>สินค้า / หน่วย</th>
-            <th>เงื่อนไข</th>
+            <th>ลำดับ</th>
+            <PriceIdentityHeaders />
             <th>ราคา</th>
             <th>เวอร์ชัน</th>
+            <th>วันที่</th>
             <th>เหตุผล / ผู้อนุมัติ</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((version) => {
-            const agreement = operations.agreements.find(
-              (row) => row.id === version.agreementId,
-            );
+          {rows.map((version, index) => {
+            const agreement = agreementById.get(version.agreementId);
             if (!agreement) return null;
             return (
               <tr key={version.id}>
+                <td>{index + 1}</td>
+                <PriceIdentityCells row={agreement} registry={registry} />
+                <td className="price-number">฿ {money(version.price)}</td>
+                <td>v{version.version}</td>
                 <td>
                   {thaiDate(version.createdAt)} · {thaiTime(version.createdAt)}
                 </td>
-                <td>
-                  <strong>
-                    {partyName(registry.parties, agreement.receiverId)}
-                  </strong>
-                  <small>
-                    {partyName(registry.parties, agreement.senderId)}
-                  </small>
-                </td>
-                <td>{catalogName(registry.catalog, agreement.catalogId)}</td>
-                <td>
-                  {PAYMENT_LABELS[agreement.payment]}
-                  <small>{branchLabel(agreement.branch)}</small>
-                </td>
-                <td className="price-number">฿ {money(version.price)}</td>
-                <td>v{version.version}</td>
                 <td>
                   {version.reason}
                   <small>{version.approvedBy}</small>
@@ -2477,6 +2490,9 @@ function BatchAdjustment({
   const [value, setValue] = useState(5);
   const [reason, setReason] = useState("ปรับตามต้นทุนเชื้อเพลิง");
   const matches = rows;
+  const versionById = new Map(
+    operations.priceVersions.map((version) => [version.id, version]),
+  );
   function adjusted(row: PriceAgreement) {
     const old = currentPrice(operations, row.key) || 0;
     const delta = method === "PERCENT" ? (old * value) / 100 : value;
@@ -2570,38 +2586,40 @@ function BatchAdjustment({
       <section className="batch-preview">
         <header>
           <h2>ตัวอย่างก่อนยืนยัน</h2>
-          <span>{matches.length} รายการ</span>
+          <span>
+            {matches.length > 50
+              ? `แสดง 50 จาก ${matches.length} รายการ`
+              : `${matches.length} รายการ`}
+          </span>
         </header>
         <div className="ops-table-wrap">
-          <table className="ops-table">
+          <table className="ops-table pricing-table batch-price-table">
             <thead>
               <tr>
-                <th>คู่ลูกค้า / สินค้า</th>
-                <th>ราคาเดิม</th>
+                <th>ลำดับ</th>
+                <PriceIdentityHeaders />
+                <th>ราคา</th>
+                <th>เวอร์ชัน</th>
                 <th>ราคาใหม่</th>
                 <th>เปลี่ยนแปลง</th>
               </tr>
             </thead>
             <tbody>
-              {matches.slice(0, 50).map((row) => {
+              {matches.slice(0, 50).map((row, index) => {
                 const old = currentPrice(operations, row.key) || 0;
                 const next = adjusted(row);
+                const version = row.currentVersionId
+                  ? versionById.get(row.currentVersionId)
+                  : null;
                 return (
                   <tr key={row.id}>
-                    <td>
-                      <strong>
-                        {partyName(registry.parties, row.receiverId)}
-                      </strong>
-                      <small>
-                        {partyName(registry.parties, row.senderId)} ·{" "}
-                        {catalogName(registry.catalog, row.catalogId)}
-                      </small>
-                    </td>
-                    <td>{money(old)}</td>
-                    <td className="price-number">{money(next)}</td>
+                    <td>{index + 1}</td>
+                    <PriceIdentityCells row={row} registry={registry} />
+                    <td className="price-number">฿ {money(old)}</td>
+                    <td>{version ? `v${version.version}` : "–"}</td>
+                    <td className="price-number">฿ {money(next)}</td>
                     <td className={next >= old ? "price-up" : "price-down"}>
-                      {next >= old ? "+" : ""}
-                      {money(next - old)}
+                      {next >= old ? "+" : ""}฿ {money(next - old)}
                     </td>
                   </tr>
                 );
