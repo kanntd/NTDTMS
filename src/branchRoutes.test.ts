@@ -5,7 +5,7 @@ import {
   destinationBranches,
   isDestinationBranch,
 } from "./branchRoutes";
-import { demoBranches, demoZones } from "./demo";
+import { demoBranches, demoDestinationCode, demoZones } from "./demo";
 
 describe("destinationBranches", () => {
   it("uses configured branches, including new and renamed routes", () => {
@@ -39,5 +39,12 @@ describe("destinationBranches", () => {
     expect(configuredDestinationBranchCode("KPT", branches, demoZones)).toBe(
       "KP",
     );
+  });
+
+  it("infers the destination of older demo bills that have no branch code", () => {
+    expect(demoDestinationCode("z-plk", "plk-1", demoBranches)).toBe("PLK");
+    expect(demoDestinationCode("z-plk", "plk-2", demoBranches)).toBe("PLK");
+    expect(demoDestinationCode("z-sti", "sti-2", demoBranches)).toBe("SWL");
+    expect(demoDestinationCode("z-sti", "sti-3", demoBranches)).toBe("STI");
   });
 });

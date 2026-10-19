@@ -1,7 +1,8 @@
 import { localDate } from "./domain";
-import type { CodPaymentRecord, Shipment } from "./types";
+import type { CodPaymentRecord, DeliveryLineRecord, Shipment } from "./types";
 
 export type CodCollectionStatus = "PENDING" | "PARTIAL" | "COLLECTED";
+export type CodDeliveryFilter = "" | "SENT" | "NOT_SENT";
 
 export type CodSummary = {
   outstanding: { count: number; amount: number };
@@ -16,11 +17,47 @@ export function dateKey(value?: string) {
   return Number.isNaN(date.getTime()) ? "" : localDate(date);
 }
 
+export function matchesCodDeliveryFilter(
+  shipment: Pick<Shipment, "delivered_at">,
+  status: CodDeliveryFilter,
+  from = "",
+  to = "",
+) {
+  const delivered = dateKey(shipment.delivered_at);
+  if (status === "NOT_SENT") return !delivered;
+  if (status === "SENT" && !delivered) return false;
+  return (!from || delivered >= from) && (!to || delivered <= to);
+}
+
+export function withRecordedDeliveryDates(
+  shipments: Shipment[],
+  lines: DeliveryLineRecord[],
+): Shipment[] {
+  const latest = new Map<string, { value: string; time: number }>();
+  for (const line of lines) {
+    if (!line.deliveredAt) continue;
+    const time = new Date(line.deliveredAt).getTime();
+    if (!Number.isFinite(time)) continue;
+    const previous = latest.get(line.shipmentId);
+    if (!previous || time > previous.time)
+      latest.set(line.shipmentId, { value: line.deliveredAt, time });
+  }
+  return shipments.map((row) =>
+    row.delivered_at || !latest.has(row.id)
+      ? row
+      : { ...row, delivered_at: latest.get(row.id)?.value },
+  );
+}
+
 export function codCollectionStatus(
   shipment: Pick<Shipment, "paid_amount" | "outstanding_amount">,
 ): CodCollectionStatus {
   if (shipment.outstanding_amount <= 0) return "COLLECTED";
   return shipment.paid_amount > 0 ? "PARTIAL" : "PENDING";
+}
+
+export function outstandingCodBills(shipments: Shipment[]) {
+  return shipments.filter((row) => row.outstanding_amount > 0);
 }
 
 export function compareBillNumbers(a: string, b: string) {
@@ -36,6 +73,15 @@ export function matchingBills(shipments: Shipment[], query: string) {
   if (exact.length) return exact;
   const digits = normalized.replace(/\D/g, "");
   if (!digits) return [];
+  if (/^\d{1,6}$/.test(normalized)) {
+    const sequence = Number(normalized);
+    const bySequence = shipments.filter((row) => {
+      const standard = /^.+\d{2}(\d{6})$/.exec(row.shipment_no);
+      const demo = /^DEMO-(\d+)$/i.exec(row.shipment_no);
+      return Number(standard?.[1] || demo?.[1]) === sequence;
+    });
+    if (bySequence.length) return bySequence;
+  }
   return shipments.filter((row) =>
     row.shipment_no.replace(/\D/g, "").endsWith(digits),
   );

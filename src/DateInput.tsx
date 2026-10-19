@@ -13,12 +13,13 @@ export function parseDisplayDate(value: string): string | null {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-export default function DateInput({ value, onChange, min, max, required, ...props }: {
+export default function DateInput({ value, onChange, min, max, required, disabled, ...props }: {
   value: string;
   onChange: (value: string) => void;
   min?: string;
   max?: string;
   required?: boolean;
+  disabled?: boolean;
   "aria-label"?: string;
 }) {
   const [text, setText] = useState(value ? thaiDate(value) : "");
@@ -36,12 +37,13 @@ export default function DateInput({ value, onChange, min, max, required, ...prop
   };
   return <span className="date-input">
     <input {...props} type="text" inputMode="numeric" placeholder="dd/mm/yy" value={text}
+      disabled={disabled}
       required={required} pattern="[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}"
       onChange={(event) => setText(event.target.value)} onBlur={commit}
       onKeyDown={(event) => { if (event.key === "Enter") { commit(); event.currentTarget.blur(); } }} />
-    <button type="button" className="date-input-picker" aria-label="เลือกวันที่" title="เลือกวันที่"
+    <button type="button" className="date-input-picker" aria-label="เลือกวันที่" title="เลือกวันที่" disabled={disabled}
       onClick={() => picker.current?.showPicker?.()}><CalendarDays size={17} /></button>
-    <input ref={picker} className="date-input-native" type="date" tabIndex={-1}
+    <input ref={picker} className="date-input-native" type="date" tabIndex={-1} disabled={disabled}
       value={value} min={min} max={max} onChange={(event) => onChange(event.target.value)} />
   </span>;
 }

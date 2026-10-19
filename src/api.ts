@@ -764,15 +764,36 @@ export async function getLoadTrips(
     };
   });
 }
-export async function getDeliveryLines() {
-  const result = await supabase
-    .from("delivery_attempt_item_lines")
-    .select("shipment_id,shipment_item_id,quantity,created_at");
-  if (result.error) {
-    if (["42P01", "PGRST205"].includes(result.error.code || "")) return [];
-    throw result.error;
+export async function getDeliveryLines(shipmentIds?: string[]) {
+  if (shipmentIds && !shipmentIds.length) return [];
+  const batches = shipmentIds ? chunkValues([...new Set(shipmentIds)]) : [null];
+  const records: {
+    shipment_id: string;
+    shipment_item_id: string;
+    quantity: number;
+    created_at: string;
+  }[] = [];
+  for (const ids of batches) {
+    let page = 0;
+    do {
+      let query = supabase
+        .from("delivery_attempt_item_lines")
+        .select("shipment_id,shipment_item_id,quantity,created_at")
+        .order("id");
+      if (ids) query = query.in("shipment_id", ids);
+      const result = ids
+        ? await query.range(page * 500, page * 500 + 499)
+        : await query;
+      if (result.error) {
+        if (["42P01", "PGRST205"].includes(result.error.code || "")) return [];
+        throw result.error;
+      }
+      records.push(...(result.data || []));
+      if (!ids || (result.data || []).length < 500) break;
+      page += 1;
+    } while (true);
   }
-  return (result.data || []).map((row) => ({
+  return records.map((row) => ({
     shipmentId: String(row.shipment_id),
     itemId: String(row.shipment_item_id),
     quantity: Number(row.quantity) || 0,

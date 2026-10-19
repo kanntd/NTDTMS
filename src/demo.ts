@@ -9,6 +9,7 @@ import type {
   Zone,
 } from "./types";
 import { localDate, totals } from "./domain";
+import { BRANCH_OPTIONS } from "./intakeData";
 
 export const demoZones: Zone[] = [
   {
@@ -109,6 +110,27 @@ export const demoBranches: CompanyBranch[] = [
   },
 ];
 
+export function demoDestinationCode(
+  zoneId: string,
+  districtId: string,
+  branches?: CompanyBranch[],
+) {
+  const route =
+    BRANCH_OPTIONS.find((option) => option.districtId === districtId) ||
+    BRANCH_OPTIONS.find(
+      (option) =>
+        option.zoneId === zoneId &&
+        option.code === zoneId.replace(/^z-/, "").toUpperCase(),
+    );
+  if (!route) return "";
+  return (
+    (branches || demoBranches).find(
+      (branch) => branch.id === `branch-${route.code.toLowerCase()}`,
+    )
+      ?.code || route.code
+  );
+}
+
 export interface DemoState {
   shipments: ShipmentDetail[];
   parties: Party[];
@@ -194,6 +216,11 @@ export function createDemoShipment(
     receiver_snapshot: snapshots[1],
     zone_id: z.id,
     district_id: input.district_id,
+    destination_branch_code: demoDestinationCode(
+      input.zone_id,
+      input.district_id,
+      state.branches,
+    ),
     zone_name: z.name,
     district_name: z.districts.find((d) => d.id === input.district_id)!.name,
     zone_color: z.color,
