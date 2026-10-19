@@ -48,6 +48,18 @@ const registry = {
       district: "วังทอง",
       province: "พิษณุโลก",
     },
+    {
+      id: "receiver-other-province",
+      display_name: "ผู้รับต่างจังหวัด",
+      phone: "",
+      address: "",
+      tax_id: "",
+      credit_limit: 0,
+      credit_days: 0,
+      is_active: true,
+      district: "เมืองพิษณุโลก",
+      province: "สุโขทัย",
+    },
     ...["sender-main", "sender-a", "sender-b", "sender-other"].map((id) => ({
       id,
       display_name: id,
@@ -169,6 +181,23 @@ describe("price recommendations", () => {
     expect(result.price).toBe(30);
     expect(result.matchCount).toBe(2);
     expect(result.sourceLabel).toBe("ประวัติผู้รับ");
+
+    addCurrentPrice(operations, {
+      id: "credit-agreement",
+      receiverId: "receiver-main",
+      senderId: "sender-a",
+      payment: "CREDIT_DESTINATION",
+      price: 35,
+      createdAt: "2026-09-22T03:00:00.000Z",
+    });
+    const creditResult = buildPriceRecommendation(
+      request({ payment: "CREDIT_DESTINATION", senderId: "sender-b" }),
+      operations,
+      registry,
+    );
+    expect(creditResult.price).toBe(35);
+    expect(creditResult.matchCount).toBe(1);
+    expect(creditResult.sourceLabel).toBe("ประวัติผู้รับ");
   });
 
   it("uses sender, product and destination district for origin-paid bills", () => {
@@ -177,7 +206,7 @@ describe("price recommendations", () => {
       id: "same-area",
       receiverId: "receiver-same-area",
       senderId: "sender-main",
-      payment: "CASH_ORIGIN",
+      payment: "CREDIT_ORIGIN",
       price: 45,
       createdAt: "2026-09-20T03:00:00.000Z",
     });
@@ -197,6 +226,22 @@ describe("price recommendations", () => {
       price: 80,
       createdAt: "2026-09-22T03:00:00.000Z",
     });
+    addCurrentPrice(operations, {
+      id: "other-province",
+      receiverId: "receiver-other-province",
+      senderId: "sender-main",
+      payment: "CREDIT_ORIGIN",
+      price: 95,
+      createdAt: "2026-09-23T03:00:00.000Z",
+    });
+    addCurrentPrice(operations, {
+      id: "other-payment",
+      receiverId: "receiver-same-area",
+      senderId: "sender-main",
+      payment: "CASH_ORIGIN",
+      price: 20,
+      createdAt: "2026-09-24T03:00:00.000Z",
+    });
 
     const result = buildPriceRecommendation(
       request({ payment: "CREDIT_ORIGIN" }),
@@ -207,6 +252,15 @@ describe("price recommendations", () => {
     expect(result.price).toBe(45);
     expect(result.matchCount).toBe(1);
     expect(result.sourceLabel).toBe("ประวัติสินค้าในพื้นที่");
+
+    const cashResult = buildPriceRecommendation(
+      request({ payment: "CASH_ORIGIN" }),
+      operations,
+      registry,
+    );
+    expect(cashResult.price).toBe(20);
+    expect(cashResult.matchCount).toBe(1);
+    expect(cashResult.sourceLabel).toBe("ประวัติสินค้าในพื้นที่");
   });
 
   it("prioritizes a destination report and flags a history conflict", () => {

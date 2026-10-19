@@ -38,6 +38,12 @@ import {
 } from "./operationsStore";
 import { localDate, money, thaiDate, thaiTime } from "./domain";
 import DateInput from "./DateInput";
+import {
+  compareListSort,
+  SORT_ALL,
+  SORT_ALL_LABEL,
+  type ListSort,
+} from "./listSort";
 import { intakeAmounts, onePercent } from "./intakeMath";
 import { PAYMENT_LABELS, type PaymentMode, type Role } from "./types";
 import {
@@ -66,6 +72,8 @@ type PriceFilters = {
   unit: string;
   payment: PaymentMode | "";
   branch: string;
+  province: string;
+  district: string;
 };
 type FilterOption = { id: string; label: string; detail?: string };
 type PriceDimensions = {
@@ -78,6 +86,8 @@ type PriceDimensions = {
 type FilterablePriceDimensions = PriceDimensions & {
   productId: string;
   unit: string;
+  province: string;
+  district: string;
 };
 type LocalPriceLine = {
   catalogId: string;
@@ -138,6 +148,8 @@ const emptyFilters: PriceFilters = {
   unit: "",
   payment: "",
   branch: "",
+  province: "",
+  district: "",
 };
 
 export function matchesPriceFilters(
@@ -150,7 +162,68 @@ export function matchesPriceFilters(
     (!filters.productId || row.productId === filters.productId) &&
     (!filters.unit || row.unit === filters.unit) &&
     (!filters.payment || row.payment === filters.payment) &&
-    (!filters.branch || row.branch === filters.branch)
+    (!filters.branch || row.branch === filters.branch) &&
+    (!filters.province || row.province === filters.province) &&
+    (!filters.district || row.district === filters.district)
+  );
+}
+
+const thaiPriceCollator = new Intl.Collator("th", {
+  numeric: true,
+  sensitivity: "base",
+});
+
+export function sortPriceRows<T extends PriceDimensions & { id: string }>(
+  rows: T[],
+  catalog: ReturnType<typeof loadIntakeRegistry>["catalog"],
+  parties: ReturnType<typeof loadIntakeRegistry>["parties"],
+  sort: ListSort | "" = "",
+  priceOf: (row: T) => number | null = () => null,
+): T[] {
+  const catalogNames = new Map(catalog.map((item) => [item.id, item.name]));
+  const catalogUnits = new Map(catalog.map((item) => [item.id, item.unit]));
+  const partyNames = new Map(
+    parties.map((party) => [party.id, party.display_name]),
+  );
+  return [...rows].sort(
+    (a, b) =>
+      (sort
+        ? compareListSort(
+            {
+              receiver: partyNames.get(a.receiverId) || "",
+              sender: partyNames.get(a.senderId) || "",
+              product: catalogNames.get(a.catalogId) || "",
+              unit: catalogUnits.get(a.catalogId) || "",
+              price: priceOf(a),
+            },
+            {
+              receiver: partyNames.get(b.receiverId) || "",
+              sender: partyNames.get(b.senderId) || "",
+              product: catalogNames.get(b.catalogId) || "",
+              unit: catalogUnits.get(b.catalogId) || "",
+              price: priceOf(b),
+            },
+            sort,
+          )
+        : 0) ||
+      thaiPriceCollator.compare(
+        catalogNames.get(a.catalogId) || "",
+        catalogNames.get(b.catalogId) || "",
+      ) ||
+      thaiPriceCollator.compare(
+        catalogUnits.get(a.catalogId) || "",
+        catalogUnits.get(b.catalogId) || "",
+      ) ||
+      thaiPriceCollator.compare(
+        partyNames.get(a.senderId) || "",
+        partyNames.get(b.senderId) || "",
+      ) ||
+      thaiPriceCollator.compare(
+        partyNames.get(a.receiverId) || "",
+        partyNames.get(b.receiverId) || "",
+      ) ||
+      a.catalogId.localeCompare(b.catalogId) ||
+      a.id.localeCompare(b.id),
   );
 }
 
@@ -194,6 +267,10 @@ const requestStatusLabel: Record<PriceRequest["status"], string> = {
 };
 
 const originPayments: PaymentMode[] = ["CASH_ORIGIN", "CREDIT_ORIGIN"];
+const destinationPayments: PaymentMode[] = [
+  "CASH_DESTINATION",
+  "CREDIT_DESTINATION",
+];
 
 function preferredReferencePrice(rows: { price: number; createdAt: string }[]) {
   const groups = new Map<
@@ -239,7 +316,7 @@ export function buildPriceRecommendation(
       return version ? [{ agreement, version }] : [];
     })
     .filter(({ agreement }) => {
-      if (request.payment === "CASH_DESTINATION")
+      if (destinationPayments.includes(request.payment))
         return (
           agreement.receiverId === request.receiverId &&
           agreement.catalogId === request.catalogId &&
@@ -249,13 +326,15 @@ export function buildPriceRecommendation(
         const referenceReceiver = registry.parties.find(
           (party) => party.id === agreement.receiverId,
         );
-        const sameArea = receiverArea
-          ? referenceReceiver?.district?.trim() === receiverArea
-          : agreement.branch === request.branch;
+        const sameArea =
+          receiverArea && receiver?.province?.trim()
+            ? referenceReceiver?.district?.trim() === receiverArea &&
+              referenceReceiver?.province?.trim() === receiver.province.trim()
+            : agreement.branch === request.branch;
         return (
           agreement.senderId === request.senderId &&
           agreement.catalogId === request.catalogId &&
-          originPayments.includes(agreement.payment) &&
+          agreement.payment === request.payment &&
           sameArea
         );
       }
@@ -269,12 +348,13 @@ export function buildPriceRecommendation(
     })
     .sort((a, b) => b.version.createdAt.localeCompare(a.version.createdAt));
 
-  const historyKind: PriceEvidenceKind =
-    request.payment === "CASH_DESTINATION"
-      ? "RECEIVER_HISTORY"
-      : originPayments.includes(request.payment)
-        ? "AREA_HISTORY"
-        : "EXACT_HISTORY";
+  const historyKind: PriceEvidenceKind = destinationPayments.includes(
+    request.payment,
+  )
+    ? "RECEIVER_HISTORY"
+    : originPayments.includes(request.payment)
+      ? "AREA_HISTORY"
+      : "EXACT_HISTORY";
   const historicalEvidence: PriceEvidence[] = references.map(
     ({ agreement, version }) => {
       const referenceReceiver = registry.parties.find(
@@ -496,6 +576,7 @@ export default function Pricing() {
   const [loadingRemote, setLoadingRemote] = useState(!w.demo);
   const [tab, setTab] = useState<Tab>("pending");
   const [filters, setFilters] = useState<PriceFilters>(emptyFilters);
+  const [sort, setSort] = useState<ListSort | "">("");
   const [pendingStatus, setPendingStatus] = useState<
     PriceRequest["status"] | ""
   >("");
@@ -541,17 +622,56 @@ export default function Pricing() {
 
   const dimensions = [...operations.agreements, ...operations.priceRequests];
   const catalogById = new Map(registry.catalog.map((item) => [item.id, item]));
-  const branchDimensions = dimensions.filter((row) =>
-    isDestinationBranch(row.branch, filters.branch, w.branches, w.zones),
+  const versionById = new Map(
+    operations.priceVersions.map((item) => [item.id, item]),
   );
+  const branchDimensions = dimensions.filter(
+    (row) =>
+      isDestinationBranch(row.branch, filters.branch, w.branches, w.zones) &&
+      (!filters.payment || row.payment === filters.payment),
+  );
+  const receiverById = new Map(
+    registry.parties.map((party) => [party.id, party]),
+  );
+  const provinceOptions = [
+    ...new Set(
+      branchDimensions
+        .map((row) => receiverById.get(row.receiverId)?.province?.trim())
+        .filter((value): value is string => !!value),
+    ),
+  ]
+    .sort(thaiPriceCollator.compare)
+    .map((value) => ({ id: value, label: value }));
+  const districtOptions = [
+    ...new Set(
+      branchDimensions
+        .filter(
+          (row) =>
+            !filters.province ||
+            receiverById.get(row.receiverId)?.province?.trim() ===
+              filters.province,
+        )
+        .map((row) => receiverById.get(row.receiverId)?.district?.trim())
+        .filter((value): value is string => !!value),
+    ),
+  ]
+    .sort(thaiPriceCollator.compare)
+    .map((value) => ({ id: value, label: value }));
+  const areaDimensions = branchDimensions.filter((row) => {
+    const receiver = receiverById.get(row.receiverId);
+    return (
+      (!filters.province || receiver?.province?.trim() === filters.province) &&
+      (!filters.district || receiver?.district?.trim() === filters.district)
+    );
+  });
   const receiverOptions = [
-    ...new Set(branchDimensions.map((row) => row.receiverId)),
+    ...new Set(areaDimensions.map((row) => row.receiverId)),
   ]
     .map((id) => ({ id, label: partyName(registry.parties, id) }))
     .sort((a, b) => a.label.localeCompare(b.label, "th"));
   const senderOptions = [
     ...new Set(
-      branchDimensions
+      areaDimensions
         .filter(
           (row) => !filters.receiverId || row.receiverId === filters.receiverId,
         )
@@ -560,7 +680,7 @@ export default function Pricing() {
   ]
     .map((id) => ({ id, label: partyName(registry.parties, id) }))
     .sort((a, b) => a.label.localeCompare(b.label, "th"));
-  const scopedCatalog = branchDimensions
+  const scopedCatalog = areaDimensions
     .filter(
       (row) =>
         (!filters.receiverId || row.receiverId === filters.receiverId) &&
@@ -572,7 +692,10 @@ export default function Pricing() {
     ...new Map(
       scopedCatalog
         .filter((item) => item.productId)
-        .map((item) => [item.productId, { id: item.productId, label: item.name }]),
+        .map((item) => [
+          item.productId,
+          { id: item.productId, label: item.name },
+        ]),
     ).values(),
   ].sort((a, b) => a.label.localeCompare(b.label, "th"));
   const unitOptions = [
@@ -602,49 +725,72 @@ export default function Pricing() {
           ...row,
           productId: catalog?.productId || "",
           unit: catalog?.unit || "",
+          province: receiverById.get(row.receiverId)?.province?.trim() || "",
+          district: receiverById.get(row.receiverId)?.district?.trim() || "",
         },
-      ) &&
-      isDestinationBranch(row.branch, filters.branch, w.branches, w.zones)
+      ) && isDestinationBranch(row.branch, filters.branch, w.branches, w.zones)
     );
   };
-  const currentRows = operations.agreements
-    .filter((row) => row.active && row.currentVersionId)
-    .filter(matchesDimensions)
-    .filter((row) => {
-      const version = operations.priceVersions.find(
-        (item) => item.id === row.currentVersionId,
-      );
-      return [
-        partyName(registry.parties, row.receiverId),
-        partyName(registry.parties, row.senderId),
-        catalogName(registry.catalog, row.catalogId),
-        PAYMENT_LABELS[row.payment],
-        branchLabel(row.branch),
-        version?.reason || "",
-        version?.approvedBy || "",
-      ]
-        .join(" ")
-        .toLocaleLowerCase("th")
-        .includes(normalized);
-    });
-  const pendingRows = operations.priceRequests
-    .filter((row) => shouldShowPriceRequest(row.status, showAllRequests))
-    .filter(matchesDimensions)
-    .filter((row) => !pendingStatus || row.status === pendingStatus)
-    .filter((row) =>
-      isWithinPriceRequestRange(row.requestedAt, requestFrom, requestTo),
-    )
-    .filter((row) =>
-      `${partyName(registry.parties, row.receiverId)} ${partyName(registry.parties, row.senderId)} ${catalogName(registry.catalog, row.catalogId)} ${row.billNumber} ${PAYMENT_LABELS[row.payment]} ${branchLabel(row.branch)} ${requestStatusLabel[row.status]} ${row.note}`
-        .toLocaleLowerCase("th")
-        .includes(normalized),
-    );
+  const currentRows = sortPriceRows(
+    operations.agreements
+      .filter((row) => row.active && row.currentVersionId)
+      .filter(matchesDimensions)
+      .filter((row) => {
+        const version = operations.priceVersions.find(
+          (item) => item.id === row.currentVersionId,
+        );
+        return [
+          partyName(registry.parties, row.receiverId),
+          partyName(registry.parties, row.senderId),
+          catalogName(registry.catalog, row.catalogId),
+          PAYMENT_LABELS[row.payment],
+          branchLabel(row.branch),
+          version?.reason || "",
+          version?.approvedBy || "",
+        ]
+          .join(" ")
+          .toLocaleLowerCase("th")
+          .includes(normalized);
+      }),
+    registry.catalog,
+    registry.parties,
+    sort,
+    (row) =>
+      row.currentVersionId
+        ? (versionById.get(row.currentVersionId)?.price ?? null)
+        : null,
+  );
+  let pendingRows = sortPriceRows(
+    operations.priceRequests
+      .filter((row) => shouldShowPriceRequest(row.status, showAllRequests))
+      .filter(matchesDimensions)
+      .filter((row) => !pendingStatus || row.status === pendingStatus)
+      .filter((row) =>
+        isWithinPriceRequestRange(row.requestedAt, requestFrom, requestTo),
+      )
+      .filter((row) =>
+        `${partyName(registry.parties, row.receiverId)} ${partyName(registry.parties, row.senderId)} ${catalogName(registry.catalog, row.catalogId)} ${row.billNumber} ${PAYMENT_LABELS[row.payment]} ${branchLabel(row.branch)} ${requestStatusLabel[row.status]} ${row.note}`
+          .toLocaleLowerCase("th")
+          .includes(normalized),
+      ),
+    registry.catalog,
+    registry.parties,
+  );
   const pendingRecommendations = new Map(
     pendingRows.map((row) => [
       row.id,
       buildPriceRecommendation(row, operations, registry),
     ]),
   );
+  if (sort)
+    pendingRows = sortPriceRows(
+      pendingRows,
+      registry.catalog,
+      registry.parties,
+      sort,
+      (row) =>
+        row.approvedPrice ?? pendingRecommendations.get(row.id)?.price ?? null,
+    );
   const historyRows = [...operations.priceVersions]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .filter((version) => {
@@ -664,6 +810,27 @@ export default function Pricing() {
               .includes(normalized)
         : false;
     });
+  if (sort) {
+    const agreementById = new Map(
+      operations.agreements.map((row) => [row.id, row]),
+    );
+    const values = (version: OperationsState["priceVersions"][number]) => {
+      const agreement = agreementById.get(version.agreementId);
+      const catalog = catalogById.get(agreement?.catalogId || "");
+      return {
+        receiver: partyName(registry.parties, agreement?.receiverId || "", ""),
+        sender: partyName(registry.parties, agreement?.senderId || "", ""),
+        product: catalog?.name || "",
+        unit: catalog?.unit || "",
+        price: version.price,
+      };
+    };
+    historyRows.sort(
+      (a, b) =>
+        compareListSort(values(a), values(b), sort) ||
+        b.createdAt.localeCompare(a.createdAt),
+    );
+  }
   const waitingForPrice = pendingRows.filter(
     (row) => row.status === "PENDING_PRICE" || row.status === "RETURNED",
   ).length;
@@ -688,10 +855,13 @@ export default function Pricing() {
     filters.productId ||
     filters.unit ||
     filters.payment ||
-    filters.branch,
+    filters.branch ||
+    filters.province ||
+    filters.district,
   );
   function clearFilters() {
     setFilters(emptyFilters);
+    setSort("");
     setPendingStatus("");
     setShowAllRequests(false);
     setRequestFrom("");
@@ -953,10 +1123,14 @@ export default function Pricing() {
       <PriceFilterBar
         tab={tab}
         filters={filters}
+        sort={sort}
+        onSort={setSort}
         receiverOptions={receiverOptions}
         senderOptions={senderOptions}
         productOptions={productOptions}
         unitOptions={unitOptions}
+        provinceOptions={provinceOptions}
+        districtOptions={districtOptions}
         pendingStatus={pendingStatus}
         showAllRequests={showAllRequests}
         requestFrom={requestFrom}
@@ -970,7 +1144,10 @@ export default function Pricing() {
         onPendingStatus={setPendingStatus}
         onShowAllRequests={(showAll) => {
           setShowAllRequests(showAll);
-          if (!showAll && (pendingStatus === "RESOLVED" || pendingStatus === "CANCELLED"))
+          if (
+            !showAll &&
+            (pendingStatus === "RESOLVED" || pendingStatus === "CANCELLED")
+          )
             setPendingStatus("");
         }}
         onRequestFrom={(date) => {
@@ -1050,10 +1227,14 @@ export default function Pricing() {
 function PriceFilterBar({
   tab,
   filters,
+  sort,
+  onSort,
   receiverOptions,
   senderOptions,
   productOptions,
   unitOptions,
+  provinceOptions,
+  districtOptions,
   pendingStatus,
   showAllRequests,
   requestFrom,
@@ -1075,10 +1256,14 @@ function PriceFilterBar({
 }: {
   tab: Tab;
   filters: PriceFilters;
+  sort: ListSort | "";
+  onSort: (sort: ListSort | "") => void;
   receiverOptions: FilterOption[];
   senderOptions: FilterOption[];
   productOptions: FilterOption[];
   unitOptions: FilterOption[];
+  provinceOptions: FilterOption[];
+  districtOptions: FilterOption[];
   pendingStatus: PriceRequest["status"] | "";
   showAllRequests: boolean;
   requestFrom: string;
@@ -1110,6 +1295,9 @@ function PriceFilterBar({
     filters.unit ||
     filters.payment ||
     filters.branch ||
+    filters.province ||
+    filters.district ||
+    sort ||
     pendingStatus ||
     requestFrom ||
     requestTo ||
@@ -1142,35 +1330,77 @@ function PriceFilterBar({
         <FilterPicker
           label="ผู้รับ"
           emptyLabel="ผู้รับทั้งหมด"
-          value={filters.receiverId}
-          options={receiverOptions}
-          onChange={(receiverId) =>
-            patch({ receiverId, senderId: "", productId: "", unit: "" })
-          }
+          value={filters.receiverId || (sort === "RECEIVER" ? SORT_ALL : "")}
+          options={[
+            { id: SORT_ALL, label: SORT_ALL_LABEL },
+            ...receiverOptions,
+          ]}
+          onChange={(receiverId) => {
+            patch(
+              receiverId === SORT_ALL
+                ? { receiverId: "" }
+                : { receiverId, senderId: "", productId: "", unit: "" },
+            );
+            onSort(
+              receiverId === SORT_ALL
+                ? "RECEIVER"
+                : sort === "RECEIVER"
+                  ? ""
+                  : sort,
+            );
+          }}
         />
         <FilterPicker
           label="ผู้ส่ง"
           emptyLabel="ผู้ส่งทั้งหมด"
-          value={filters.senderId}
-          options={senderOptions}
-          onChange={(senderId) => patch({ senderId, productId: "", unit: "" })}
+          value={filters.senderId || (sort === "SENDER" ? SORT_ALL : "")}
+          options={[{ id: SORT_ALL, label: SORT_ALL_LABEL }, ...senderOptions]}
+          onChange={(senderId) => {
+            patch(
+              senderId === SORT_ALL
+                ? { senderId: "" }
+                : { senderId, productId: "", unit: "" },
+            );
+            onSort(
+              senderId === SORT_ALL ? "SENDER" : sort === "SENDER" ? "" : sort,
+            );
+          }}
         />
         <div className="pricing-filter-control">
           <span>สินค้า</span>
           <SearchableSelect
             ariaLabel="สินค้า"
-            value={filters.productId}
+            value={filters.productId || (sort === "PRODUCT" ? SORT_ALL : "")}
             emptyLabel="สินค้าทั้งหมด"
-            options={productOptions}
-            onChange={(productId) => patch({ productId, unit: "" })}
+            options={[
+              { id: SORT_ALL, label: SORT_ALL_LABEL },
+              ...productOptions,
+            ]}
+            onChange={(productId) => {
+              patch(
+                productId === SORT_ALL
+                  ? { productId: "" }
+                  : { productId, unit: "" },
+              );
+              onSort(
+                productId === SORT_ALL
+                  ? "PRODUCT"
+                  : sort === "PRODUCT"
+                    ? ""
+                    : sort,
+              );
+            }}
           />
         </div>
         <FilterSelect
           label="หน่วยนับ"
-          value={filters.unit}
+          value={filters.unit || (sort === "UNIT" ? SORT_ALL : "")}
           emptyLabel="ทุกหน่วยนับ"
-          options={unitOptions}
-          onChange={(unit) => patch({ unit })}
+          options={[{ id: SORT_ALL, label: SORT_ALL_LABEL }, ...unitOptions]}
+          onChange={(unit) => {
+            patch({ unit: unit === SORT_ALL ? "" : unit });
+            onSort(unit === SORT_ALL ? "UNIT" : sort === "UNIT" ? "" : sort);
+          }}
         />
         <FilterSelect
           label="ประเภทการชำระเงิน"
@@ -1181,9 +1411,52 @@ function PriceFilterBar({
             label,
           }))}
           onChange={(payment) =>
-            patch({ payment: payment as PaymentMode | "" })
+            patch({
+              payment: payment as PaymentMode | "",
+              province: "",
+              district: "",
+              receiverId: "",
+              senderId: "",
+              productId: "",
+              unit: "",
+            })
           }
         />
+        {originPayments.includes(filters.payment as PaymentMode) && (
+          <>
+            <FilterSelect
+              label="จังหวัดผู้รับ"
+              value={filters.province}
+              emptyLabel="ทุกจังหวัด"
+              options={provinceOptions}
+              onChange={(province) =>
+                patch({
+                  province,
+                  district: "",
+                  receiverId: "",
+                  senderId: "",
+                  productId: "",
+                  unit: "",
+                })
+              }
+            />
+            <FilterSelect
+              label="อำเภอผู้รับ"
+              value={filters.district}
+              emptyLabel="ทุกอำเภอ"
+              options={districtOptions}
+              onChange={(district) =>
+                patch({
+                  district,
+                  receiverId: "",
+                  senderId: "",
+                  productId: "",
+                  unit: "",
+                })
+              }
+            />
+          </>
+        )}
         <FilterSelect
           label="สาขาปลายทาง"
           value={filters.branch}
@@ -1199,8 +1472,20 @@ function PriceFilterBar({
               senderId: "",
               productId: "",
               unit: "",
+              province: "",
+              district: "",
             })
           }
+        />
+        <FilterSelect
+          label="เรียงราคา"
+          value={sort === "PRICE_ASC" || sort === "PRICE_DESC" ? sort : ""}
+          emptyLabel="ตามลำดับเดิม"
+          options={[
+            { id: "PRICE_ASC", label: "ต่ำ-สูง" },
+            { id: "PRICE_DESC", label: "สูง-ต่ำ" },
+          ]}
+          onChange={(value) => onSort(value as ListSort | "")}
         />
         {tab === "pending" && (
           <>
@@ -1419,30 +1704,42 @@ function CurrentPrices({
       <table className="ops-table pricing-table">
         <thead>
           <tr>
-            <th>ผู้รับ</th>
+            <th>ลำดับ</th>
             <th>ผู้ส่ง</th>
-            <th>สินค้า / หน่วย</th>
-            <th>สาขา</th>
+            <th>ผู้รับ</th>
+            <th>จังหวัด</th>
+            <th>อำเภอ</th>
             <th>การชำระเงิน</th>
-            <th>ราคา/หน่วย</th>
+            <th>สินค้า</th>
+            <th>หน่วย</th>
+            <th>ราคา</th>
             <th>เวอร์ชัน</th>
-            <th />
+            <th>จัดการ</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
+          {rows.map((row, index) => {
             const version = operations.priceVersions.find(
               (item) => item.id === row.currentVersionId,
             );
+            const receiver = registry.parties.find(
+              (party) => party.id === row.receiverId,
+            );
+            const catalog = registry.catalog.find(
+              (item) => item.id === row.catalogId,
+            );
             return (
               <tr key={row.id}>
+                <td>{index + 1}</td>
+                <td>{partyName(registry.parties, row.senderId)}</td>
                 <td>
                   <strong>{partyName(registry.parties, row.receiverId)}</strong>
                 </td>
-                <td>{partyName(registry.parties, row.senderId)}</td>
-                <td>{catalogName(registry.catalog, row.catalogId)}</td>
-                <td>{branchLabel(row.branch)}</td>
+                <td>{receiver?.province || "–"}</td>
+                <td>{receiver?.district || "–"}</td>
                 <td>{PAYMENT_LABELS[row.payment]}</td>
+                <td>{catalog?.name || "ไม่พบสินค้า"}</td>
+                <td>{catalog?.unit || "–"}</td>
                 <td className="price-number">฿ {money(version?.price || 0)}</td>
                 <td>
                   v{version?.version}
@@ -1760,7 +2057,8 @@ function PriceRequestDetail({
   ) => void;
 }) {
   const awaitingApproval = request.status === "PENDING_APPROVAL";
-  const isClosed = request.status === "RESOLVED" || request.status === "CANCELLED";
+  const isClosed =
+    request.status === "RESOLVED" || request.status === "CANCELLED";
   const canEditProposal =
     request.status === "PENDING_PRICE" || request.status === "RETURNED";
   const canSubmitReview = awaitingApproval && canReview;
@@ -2007,49 +2305,50 @@ function PriceRequestDetail({
                   />
                 </Field>
                 <fieldset className="price-decisions" disabled={saving}>
-                <legend>ผลการตรวจของบัญชี</legend>
-                <label>
-                  <input
-                    type="radio"
-                    name="decision"
-                    checked={decision === "STANDARD"}
-                    onChange={() => setDecision("STANDARD")}
-                  />
-                  <span>
-                    <strong>ยืนยันและใช้เป็นราคามาตรฐาน</strong>
-                    <small>บิลครั้งต่อไปจะขึ้นราคานี้อัตโนมัติ</small>
-                  </span>
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="decision"
-                    checked={decision === "BILL_ONLY"}
-                    onChange={() => setDecision("BILL_ONLY")}
-                  />
-                  <span>
-                    <strong>ยืนยันใช้เฉพาะบิลนี้</strong>
-                    <small>ไม่เปลี่ยนราคามาตรฐาน</small>
-                  </span>
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="decision"
-                    checked={decision === "RETURN"}
-                    onChange={() => setDecision("RETURN")}
-                  />
-                  <span>
-                    <strong>ส่งกลับให้ปลายทางแก้ไข</strong>
-                    <small>บิลยังคงสถานะรอราคา</small>
-                  </span>
-                </label>
+                  <legend>ผลการตรวจของบัญชี</legend>
+                  <label>
+                    <input
+                      type="radio"
+                      name="decision"
+                      checked={decision === "STANDARD"}
+                      onChange={() => setDecision("STANDARD")}
+                    />
+                    <span>
+                      <strong>ยืนยันและใช้เป็นราคามาตรฐาน</strong>
+                      <small>บิลครั้งต่อไปจะขึ้นราคานี้อัตโนมัติ</small>
+                    </span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="decision"
+                      checked={decision === "BILL_ONLY"}
+                      onChange={() => setDecision("BILL_ONLY")}
+                    />
+                    <span>
+                      <strong>ยืนยันใช้เฉพาะบิลนี้</strong>
+                      <small>ไม่เปลี่ยนราคามาตรฐาน</small>
+                    </span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="decision"
+                      checked={decision === "RETURN"}
+                      onChange={() => setDecision("RETURN")}
+                    />
+                    <span>
+                      <strong>ส่งกลับให้ปลายทางแก้ไข</strong>
+                      <small>บิลยังคงสถานะรอราคา</small>
+                    </span>
+                  </label>
                 </fieldset>
               </>
             )}
             {awaitingApproval && !canReview && (
               <div className="ops-inline-note">
-                เฉพาะผู้ดูแลระบบ หัวหน้าบัญชี หรือเจ้าของเท่านั้นที่บันทึกผลการตรวจของบัญชีได้
+                เฉพาะผู้ดูแลระบบ หัวหน้าบัญชี
+                หรือเจ้าของเท่านั้นที่บันทึกผลการตรวจของบัญชีได้
               </div>
             )}
             {canEditProposal && (

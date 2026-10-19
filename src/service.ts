@@ -1,4 +1,5 @@
 import * as api from "./api";
+import { compareListSort, firstItemName } from "./listSort";
 import {
   createDemoShipment,
   demoProducts,
@@ -185,7 +186,28 @@ export function createService(demo: boolean) {
                 .includes(o.search.toLowerCase()))
           );
         })
-        .sort((a, b) => +new Date(b.received_at) - +new Date(a.received_at));
+        .sort(
+          (a, b) =>
+            (o.sort
+              ? compareListSort(
+                  {
+                    receiver: a.receiver_snapshot.display_name,
+                    sender: a.sender_snapshot.display_name,
+                    product: firstItemName(a.items || [], "description"),
+                    unit: firstItemName(a.items || [], "unit"),
+                    price: a.price_pending ? null : a.total_amount,
+                  },
+                  {
+                    receiver: b.receiver_snapshot.display_name,
+                    sender: b.sender_snapshot.display_name,
+                    product: firstItemName(b.items || [], "description"),
+                    unit: firstItemName(b.items || [], "unit"),
+                    price: b.price_pending ? null : b.total_amount,
+                  },
+                  o.sort,
+                )
+              : 0) || +new Date(b.received_at) - +new Date(a.received_at),
+        );
       const pageSize = o.pageSize || 50;
       return {
         rows: all.slice(
@@ -194,6 +216,13 @@ export function createService(demo: boolean) {
         ) as Shipment[],
         count: all.length,
       };
+    },
+    shipmentSummaries: async (
+      ids: string[],
+    ): Promise<api.ShipmentSummary[]> => {
+      if (!demo) return api.getShipmentSummaries(ids);
+      const selected = new Set(ids);
+      return allDemoShipments().filter((shipment) => selected.has(shipment.id));
     },
     detail: async (id: string) => {
       if (!demo) return api.getShipment(id);

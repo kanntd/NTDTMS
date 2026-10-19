@@ -29,6 +29,14 @@ import DateInput from "./DateInput";
 import { loadIntakeRegistry } from "./intakeRegistry";
 import { loadOperations } from "./operationsStore";
 import { loadRemoteWorkspace } from "./remoteWorkspace";
+import {
+  compareListSort,
+  firstItemName,
+  listSortOptions,
+  SORT_ALL,
+  SORT_ALL_LABEL,
+  type ListSort,
+} from "./listSort";
 import { destinationBranches, isDestinationBranch } from "./branchRoutes";
 import Receipt from "./Receipt";
 import ShipmentEditModal from "./ShipmentEditModal";
@@ -112,7 +120,7 @@ export default function CashCollection() {
   const [district, setDistrict] = useState("");
   const [priceState, setPriceState] = useState<"PENDING" | "PRICED" | "">("");
   const [vehicle, setVehicle] = useState("");
-  const [sort, setSort] = useState<"OLDEST" | "NEWEST">("OLDEST");
+  const [sort, setSort] = useState<"OLDEST" | "NEWEST" | ListSort>("OLDEST");
   const [page, setPage] = useState(0);
   const [detail, setDetail] = useState<ShipmentDetail | null>(null);
   const [editDetail, setEditDetail] = useState<ShipmentDetail | null>(null);
@@ -314,14 +322,34 @@ export default function CashCollection() {
           (priceState === "PENDING" ? row.price_pending : !row.price_pending),
       )
       .filter((row) => !vehicle || row.vehicle_plate_no === vehicle)
-      .sort((a, b) =>
-        compareBillsByOpenedAt(
-          a.received_at,
-          a.shipment_no,
-          b.received_at,
-          b.shipment_no,
-          sort === "NEWEST",
-        ),
+      .sort(
+        (a, b) =>
+          (sort !== "OLDEST" && sort !== "NEWEST"
+            ? compareListSort(
+                {
+                  receiver: a.receiver_snapshot.display_name,
+                  sender: a.sender_snapshot.display_name,
+                  product: firstItemName(a.items || [], "description"),
+                  unit: firstItemName(a.items || [], "unit"),
+                  price: a.price_pending ? null : a.total_amount,
+                },
+                {
+                  receiver: b.receiver_snapshot.display_name,
+                  sender: b.sender_snapshot.display_name,
+                  product: firstItemName(b.items || [], "description"),
+                  unit: firstItemName(b.items || [], "unit"),
+                  price: b.price_pending ? null : b.total_amount,
+                },
+                sort,
+              )
+            : 0) ||
+          compareBillsByOpenedAt(
+            a.received_at,
+            a.shipment_no,
+            b.received_at,
+            b.shipment_no,
+            sort === "NEWEST",
+          ),
       );
   }, [
     branch,
@@ -698,13 +726,17 @@ export default function CashCollection() {
             <label className="shipment-filter-control">
               <span>ผู้รับ</span>
               <select
-                value={receiver}
+                value={receiver || (sort === "RECEIVER" ? SORT_ALL : "")}
                 onChange={(event) => {
-                  setReceiver(event.target.value);
+                  const value = event.target.value;
+                  setReceiver(value === SORT_ALL ? "" : value);
+                  if (value === SORT_ALL) setSort("RECEIVER");
+                  else if (sort === "RECEIVER") setSort("OLDEST");
                   setPage(0);
                 }}
               >
                 <option value="">ผู้รับทั้งหมด</option>
+                <option value={SORT_ALL}>{SORT_ALL_LABEL}</option>
                 {receiverOptions.map(([id, label]) => (
                   <option key={id} value={id}>
                     {label}
@@ -715,13 +747,17 @@ export default function CashCollection() {
             <label className="shipment-filter-control">
               <span>ผู้ส่ง</span>
               <select
-                value={sender}
+                value={sender || (sort === "SENDER" ? SORT_ALL : "")}
                 onChange={(event) => {
-                  setSender(event.target.value);
+                  const value = event.target.value;
+                  setSender(value === SORT_ALL ? "" : value);
+                  if (value === SORT_ALL) setSort("SENDER");
+                  else if (sort === "SENDER") setSort("OLDEST");
                   setPage(0);
                 }}
               >
                 <option value="">ผู้ส่งทั้งหมด</option>
+                <option value={SORT_ALL}>{SORT_ALL_LABEL}</option>
                 {senderOptions.map(([id, label]) => (
                   <option key={id} value={id}>
                     {label}
@@ -733,11 +769,16 @@ export default function CashCollection() {
               <span>สินค้า / หน่วย</span>
               <SearchableSelect
                 ariaLabel="สินค้า / หน่วย"
-                value={catalogId}
+                value={catalogId || (sort === "PRODUCT" ? SORT_ALL : "")}
                 emptyLabel="สินค้าทั้งหมด"
-                options={productOptions.map(([id, label]) => ({ id, label }))}
+                options={[
+                  { id: SORT_ALL, label: SORT_ALL_LABEL },
+                  ...productOptions.map(([id, label]) => ({ id, label })),
+                ]}
                 onChange={(value) => {
-                  setCatalogId(value);
+                  setCatalogId(value === SORT_ALL ? "" : value);
+                  if (value === SORT_ALL) setSort("PRODUCT");
+                  else if (sort === "PRODUCT") setSort("OLDEST");
                   setPage(0);
                 }}
               />
@@ -745,13 +786,17 @@ export default function CashCollection() {
             <label className="shipment-filter-control">
               <span>หน่วยนับ</span>
               <select
-                value={unit}
+                value={unit || (sort === "UNIT" ? SORT_ALL : "")}
                 onChange={(event) => {
-                  setUnit(event.target.value);
+                  const value = event.target.value;
+                  setUnit(value === SORT_ALL ? "" : value);
+                  if (value === SORT_ALL) setSort("UNIT");
+                  else if (sort === "UNIT") setSort("OLDEST");
                   setPage(0);
                 }}
               >
                 <option value="">ทุกหน่วย</option>
+                <option value={SORT_ALL}>{SORT_ALL_LABEL}</option>
                 {unitOptions.map((value) => (
                   <option key={value}>{value}</option>
                 ))}
@@ -822,7 +867,7 @@ export default function CashCollection() {
               </select>
             </label>
             <label className="shipment-filter-control">
-              <span>เรียงตามวันที่เปิดบิล</span>
+              <span>เรียงรายการ</span>
               <div className="cod-sort-select">
                 <ArrowUpDown size={16} />
                 <select
@@ -834,6 +879,11 @@ export default function CashCollection() {
                 >
                   <option value="OLDEST">เก่าสุดก่อน</option>
                   <option value="NEWEST">ใหม่สุดก่อน</option>
+                  {listSortOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </div>
             </label>

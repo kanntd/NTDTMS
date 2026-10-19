@@ -44,13 +44,21 @@ import {
 } from "./loadingQueue";
 import { Button, Empty, Field, Loading, Modal, SearchableSelect } from "./ui";
 import {
+  compareListSort,
+  firstItemName,
+  listSortOptions,
+  SORT_ALL,
+  SORT_ALL_LABEL,
+  type ListSort,
+} from "./listSort";
+import {
   PAYMENT_LABELS,
   type LoadingQueueRecord,
   type LoadTripRecord,
   type PaymentMode,
 } from "./types";
 
-type SortMode = "OLDEST" | "RECEIVER" | "SENDER" | "NEWEST" | "QUANTITY_DESC";
+type SortMode = "OLDEST" | "NEWEST" | "QUANTITY_DESC" | ListSort;
 type AgeFilter = "" | "0" | "1" | "2" | "3" | "MORE_THAN_3";
 type LoadProgressFilter = "" | "NOT_LOADED" | "PARTIAL";
 
@@ -317,18 +325,28 @@ export default function LoadingWork({
         ).includes(query);
       })
       .sort((a, b) => {
-        if (sort === "RECEIVER")
-          return a.receiver_snapshot.display_name.localeCompare(
-            b.receiver_snapshot.display_name,
-            "th",
-          );
-        if (sort === "SENDER")
-          return a.sender_snapshot.display_name.localeCompare(
-            b.sender_snapshot.display_name,
-            "th",
-          );
         if (sort === "QUANTITY_DESC")
           return b.total_quantity - a.total_quantity;
+        if (sort !== "OLDEST" && sort !== "NEWEST") {
+          const result = compareListSort(
+            {
+              receiver: a.receiver_snapshot.display_name,
+              sender: a.sender_snapshot.display_name,
+              product: firstItemName(a.items, "description"),
+              unit: firstItemName(a.items, "unit"),
+              price: a.price_pending ? null : a.total_amount,
+            },
+            {
+              receiver: b.receiver_snapshot.display_name,
+              sender: b.sender_snapshot.display_name,
+              product: firstItemName(b.items, "description"),
+              unit: firstItemName(b.items, "unit"),
+              price: b.price_pending ? null : b.total_amount,
+            },
+            sort,
+          );
+          if (result) return result;
+        }
         return compareBillsByOpenedAt(
           a.received_at,
           a.shipment_no,
@@ -354,8 +372,14 @@ export default function LoadingWork({
 
   const groupedRows = useMemo(() => {
     const grouped = groupLoadingRows(visible, groupMode);
-    return grouped.sort((a, b) => a.label.localeCompare(b.label, "th"));
-  }, [visible, groupMode]);
+    return grouped.sort((a, b) =>
+      sort === "PRICE_ASC"
+        ? a.amount - b.amount
+        : sort === "PRICE_DESC"
+          ? b.amount - a.amount
+          : a.label.localeCompare(b.label, "th"),
+    );
+  }, [visible, groupMode, sort]);
 
   const selectedRows = rows.filter((row) => selected.has(row.id));
   const selectedBranches = new Set(
@@ -434,6 +458,7 @@ export default function LoadingWork({
   }
 
   function clearFilters() {
+    setSort("OLDEST");
     setDistrict("");
     setAge("");
     setPayment("");
@@ -875,10 +900,17 @@ export default function LoadingWork({
               </select>
               <select
                 aria-label="กรองผู้รับ"
-                value={receiver}
-                onChange={(event) => setReceiver(event.target.value)}
+                value={receiver || (sort === "RECEIVER" ? SORT_ALL : "")}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setReceiver(value === SORT_ALL ? "" : value);
+                  if (value === SORT_ALL) setSort("RECEIVER");
+                  else if (sort === "RECEIVER") setSort("OLDEST");
+                  if (value === SORT_ALL) setGroupMode("NONE");
+                }}
               >
                 <option value="">ผู้รับทั้งหมด</option>
+                <option value={SORT_ALL}>{SORT_ALL_LABEL}</option>
                 {receivers.map(([id, name]) => (
                   <option key={id} value={id}>
                     {name}
@@ -887,10 +919,17 @@ export default function LoadingWork({
               </select>
               <select
                 aria-label="กรองผู้ส่ง"
-                value={sender}
-                onChange={(event) => setSender(event.target.value)}
+                value={sender || (sort === "SENDER" ? SORT_ALL : "")}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setSender(value === SORT_ALL ? "" : value);
+                  if (value === SORT_ALL) setSort("SENDER");
+                  else if (sort === "SENDER") setSort("OLDEST");
+                  if (value === SORT_ALL) setGroupMode("NONE");
+                }}
               >
                 <option value="">ผู้ส่งทั้งหมด</option>
+                <option value={SORT_ALL}>{SORT_ALL_LABEL}</option>
                 {senders.map(([id, name]) => (
                   <option key={id} value={id}>
                     {name}
@@ -900,17 +939,32 @@ export default function LoadingWork({
               <SearchableSelect
                 className="loading-searchable-filter"
                 ariaLabel="กรองสินค้า"
-                value={product}
+                value={product || (sort === "PRODUCT" ? SORT_ALL : "")}
                 emptyLabel="สินค้าทั้งหมด"
-                options={products.map((name) => ({ id: name, label: name }))}
-                onChange={setProduct}
+                options={[
+                  { id: SORT_ALL, label: SORT_ALL_LABEL },
+                  ...products.map((name) => ({ id: name, label: name })),
+                ]}
+                onChange={(value) => {
+                  setProduct(value === SORT_ALL ? "" : value);
+                  if (value === SORT_ALL) setSort("PRODUCT");
+                  else if (sort === "PRODUCT") setSort("OLDEST");
+                  if (value === SORT_ALL) setGroupMode("NONE");
+                }}
               />
               <select
                 aria-label="กรองหน่วยนับ"
-                value={unit}
-                onChange={(event) => setUnit(event.target.value)}
+                value={unit || (sort === "UNIT" ? SORT_ALL : "")}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setUnit(value === SORT_ALL ? "" : value);
+                  if (value === SORT_ALL) setSort("UNIT");
+                  else if (sort === "UNIT") setSort("OLDEST");
+                  if (value === SORT_ALL) setGroupMode("NONE");
+                }}
               >
                 <option value="">ทุกหน่วยนับ</option>
+                <option value={SORT_ALL}>{SORT_ALL_LABEL}</option>
                 {units.map((name) => (
                   <option key={name}>{name}</option>
                 ))}
@@ -981,12 +1035,18 @@ export default function LoadingWork({
                 <select
                   aria-label="เรียงรายการ"
                   value={sort}
-                  onChange={(event) => setSort(event.target.value as SortMode)}
+                  onChange={(event) => {
+                    setSort(event.target.value as SortMode);
+                    setGroupMode("NONE");
+                  }}
                 >
                   <option value="OLDEST">วันที่เปิดบิลเก่าสุดก่อน</option>
                   <option value="NEWEST">วันที่เปิดบิลใหม่สุดก่อน</option>
-                  <option value="RECEIVER">ผู้รับ ก-ฮ</option>
-                  <option value="SENDER">ผู้ส่ง ก-ฮ</option>
+                  {listSortOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
                   <option value="QUANTITY_DESC">จำนวนมากก่อน</option>
                 </select>
               </label>

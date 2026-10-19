@@ -24,6 +24,17 @@ import type {
 import { applyRecordedLoads } from "./loadingQueue";
 import { chunkValues } from "./queryChunks";
 
+export type ShipmentSummary = Pick<
+  Shipment,
+  | "id"
+  | "received_at"
+  | "sender_snapshot"
+  | "receiver_snapshot"
+  | "district_name"
+  | "total_amount"
+  | "price_pending"
+>;
+
 export const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
@@ -119,13 +130,27 @@ export async function listShipments(
     unpaid?: boolean;
     page?: number;
     pageSize?: number;
+    sort?:
+      "RECEIVER" | "SENDER" | "PRODUCT" | "UNIT" | "PRICE_ASC" | "PRICE_DESC";
   } = {},
 ): Promise<{ rows: Shipment[]; count: number }> {
+  const itemSort = options.sort === "PRODUCT" || options.sort === "UNIT";
   let q = supabase
-    .from("shipment_register")
-    .select("*", { count: "exact" })
-    .order("received_at", { ascending: false })
-    .order("id");
+    .from(itemSort ? "shipment_register_sorted" : "shipment_register")
+    .select("*", { count: "exact" });
+  if (options.sort === "RECEIVER")
+    q = q.order("receiver_snapshot->>display_name");
+  else if (options.sort === "SENDER")
+    q = q.order("sender_snapshot->>display_name");
+  else if (options.sort === "PRODUCT" || options.sort === "UNIT")
+    q = q.order(options.sort === "PRODUCT" ? "sort_product" : "sort_unit", {
+      nullsFirst: false,
+    });
+  else if (options.sort === "PRICE_ASC" || options.sort === "PRICE_DESC")
+    q = q
+      .order("price_pending", { ascending: true })
+      .order("total_amount", { ascending: options.sort === "PRICE_ASC" });
+  q = q.order("received_at", { ascending: false }).order("id");
   if (options.date) {
     const start = new Date(options.date + "T00:00:00+07:00");
     const end = new Date(+start + 86400000);
@@ -361,6 +386,30 @@ export async function getLoadingQueue(): Promise<LoadingQueueRecord[]> {
   }
   return rows;
 }
+export async function getShipmentSummaries(
+  shipmentIds: string[],
+): Promise<ShipmentSummary[]> {
+  const rows: ShipmentSummary[] = [];
+  const chunks = chunkValues([...new Set(shipmentIds)]);
+  for (let start = 0; start < chunks.length; start += 4) {
+    const results = await Promise.all(
+      chunks
+        .slice(start, start + 4)
+        .map((ids) =>
+          supabase
+            .from("shipments")
+            .select(
+              "id,received_at,sender_snapshot,receiver_snapshot,district_name,total_amount,price_pending",
+            )
+            .in("id", ids),
+        ),
+    );
+    for (const result of results)
+      rows.push(...(check(result) as ShipmentSummary[]));
+  }
+  return rows;
+}
+
 export async function getShipment(id: string): Promise<ShipmentDetail> {
   const [s, i, f] = await Promise.all([
     supabase.from("shipment_register").select("*").eq("id", id).single(),

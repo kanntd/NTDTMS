@@ -12,22 +12,26 @@ import {
   X,
 } from "lucide-react";
 import { billNumberPrefix, compareBillsByOpenedAt } from "./billNumber";
-import {
-  destinationBranchAliases,
-  destinationBranches,
-  isDestinationBranch,
-} from "./branchRoutes";
+import { destinationBranches, isDestinationBranch } from "./branchRoutes";
 import { useWorkspace } from "./context";
 import { calendarAgeInBangkok } from "./dashboardQueue";
-import { number, thaiDate } from "./domain";
+import { money, number, thaiDate } from "./domain";
+import {
+  compareListSort,
+  firstItemName,
+  listSortOptions,
+  SORT_ALL,
+  SORT_ALL_LABEL,
+  type ListSort,
+} from "./listSort";
 import { completeBillNumber, LOADING_PAYMENT_MODES } from "./loadingQueue";
 import { Button, Empty, Loading, Modal, SearchableSelect } from "./ui";
 import {
   PAYMENT_LABELS,
   type LoadTripAllocation,
   type PaymentMode,
-  type Shipment,
 } from "./types";
+import type { ShipmentSummary } from "./api";
 
 type Item = {
   id: string;
@@ -52,8 +56,9 @@ type Bill = {
   paymentMode: NonNullable<LoadTripAllocation["paymentMode"]>;
   items: Item[];
   partial: boolean;
+  totalAmount: number | null;
 };
-type Sort = "OLDEST" | "NEWEST" | "RECEIVER" | "SENDER" | "QUANTITY";
+type Sort = "OLDEST" | "NEWEST" | "QUANTITY" | ListSort;
 type Age = "" | "0" | "1" | "2" | "3" | "MORE";
 type Progress = "" | "NONE" | "PARTIAL";
 
@@ -78,10 +83,6 @@ export default function DeliveryWork() {
     ? allBranches
     : allBranches.filter((row) => row.code === profileBranch?.code);
   const [branch, setBranch] = useState(branches[0]?.code || "");
-  const branchAliases = useMemo(
-    () => destinationBranchAliases(branch, w.branches, w.zones),
-    [branch, w.branches, w.zones],
-  );
   const [bills, setBills] = useState<Bill[]>([]);
   const [entry, setEntry] = useState("");
   const [search, setSearch] = useState("");
@@ -111,14 +112,31 @@ export default function DeliveryWork() {
     if (!branch) return;
     setLoading(true);
     try {
-      const [trips, deliveryLines, shipmentPage] = await Promise.all([
+      const [trips, deliveryLines] = await Promise.all([
         w.service.loadTrips(),
         w.service.deliveryLines(),
-        w.service.shipments({ branch, branchAliases, pageSize: 500 }),
       ]);
-      const shipmentMap = new Map(
-        shipmentPage.rows.map((row) => [row.id, row]),
+      const receivedTrips = trips.filter(
+        (trip) =>
+          trip.status === "RECEIVED" &&
+          isDestinationBranch(
+            trip.destinationBranchCode,
+            branch,
+            w.branches,
+            w.zones,
+          ),
       );
+      const shipmentIds = receivedTrips.flatMap((trip) =>
+        trip.allocations
+          .filter(
+            (line) =>
+              line.active &&
+              !["DELIVERED", "CANCELLED"].includes(line.shipmentStatus || ""),
+          )
+          .map((line) => line.shipmentId),
+      );
+      const summaries = await w.service.shipmentSummaries(shipmentIds);
+      const shipmentMap = new Map(summaries.map((row) => [row.id, row]));
       const delivered = new Map<string, number>();
       deliveryLines.forEach((line) =>
         delivered.set(
@@ -127,17 +145,7 @@ export default function DeliveryWork() {
         ),
       );
       const grouped = new Map<string, Bill>();
-      trips
-        .filter(
-          (trip) =>
-            trip.status === "RECEIVED" &&
-            isDestinationBranch(
-              trip.destinationBranchCode,
-              branch,
-              w.branches,
-              w.zones,
-            ),
-        )
+      receivedTrips
         .flatMap((trip) =>
           trip.allocations.map((line) => ({
             line,
@@ -195,7 +203,7 @@ export default function DeliveryWork() {
 
   function createBill(
     line: LoadTripAllocation,
-    shipment: Shipment | undefined,
+    shipment: ShipmentSummary | undefined,
     receivedAt: string,
   ): Bill {
     return {
@@ -213,6 +221,8 @@ export default function DeliveryWork() {
       paymentMode: line.paymentMode || "CASH_ORIGIN",
       items: [],
       partial: false,
+      totalAmount:
+        shipment && !shipment.price_pending ? shipment.total_amount : null,
     };
   }
 
@@ -301,11 +311,31 @@ export default function DeliveryWork() {
           ).includes(query),
       )
       .sort((a, b) => {
-        if (group === "RECEIVER" || sort === "RECEIVER")
+        if (group === "RECEIVER")
           return a.receiverName.localeCompare(b.receiverName, "th");
-        if (group === "SENDER" || sort === "SENDER")
+        if (group === "SENDER")
           return a.senderName.localeCompare(b.senderName, "th");
         if (sort === "QUANTITY") return quantity(b) - quantity(a);
+        if (sort !== "OLDEST" && sort !== "NEWEST") {
+          const result = compareListSort(
+            {
+              receiver: a.receiverName,
+              sender: a.senderName,
+              product: firstItemName(a.items, "description"),
+              unit: firstItemName(a.items, "unit"),
+              price: a.totalAmount,
+            },
+            {
+              receiver: b.receiverName,
+              sender: b.senderName,
+              product: firstItemName(b.items, "description"),
+              unit: firstItemName(b.items, "unit"),
+              price: b.totalAmount,
+            },
+            sort,
+          );
+          if (result) return result;
+        }
         return compareBillsByOpenedAt(
           a.openedAt,
           a.shipmentNo,
@@ -385,6 +415,7 @@ export default function DeliveryWork() {
     );
   }
   function clearFilters() {
+    setSort("OLDEST");
     setSearch("");
     setReceiver("");
     setSender("");
@@ -546,10 +577,17 @@ export default function DeliveryWork() {
           </select>
           <select
             aria-label="กรองผู้รับ"
-            value={receiver}
-            onChange={(event) => setReceiver(event.target.value)}
+            value={receiver || (sort === "RECEIVER" ? SORT_ALL : "")}
+            onChange={(event) => {
+              const value = event.target.value;
+              setReceiver(value === SORT_ALL ? "" : value);
+              if (value === SORT_ALL) setSort("RECEIVER");
+              else if (sort === "RECEIVER") setSort("OLDEST");
+              if (value === SORT_ALL) setGroup("NONE");
+            }}
           >
             <option value="">ผู้รับทั้งหมด</option>
+            <option value={SORT_ALL}>{SORT_ALL_LABEL}</option>
             {receivers.map(([id, name]) => (
               <option key={id} value={id}>
                 {name}
@@ -558,10 +596,17 @@ export default function DeliveryWork() {
           </select>
           <select
             aria-label="กรองผู้ส่ง"
-            value={sender}
-            onChange={(event) => setSender(event.target.value)}
+            value={sender || (sort === "SENDER" ? SORT_ALL : "")}
+            onChange={(event) => {
+              const value = event.target.value;
+              setSender(value === SORT_ALL ? "" : value);
+              if (value === SORT_ALL) setSort("SENDER");
+              else if (sort === "SENDER") setSort("OLDEST");
+              if (value === SORT_ALL) setGroup("NONE");
+            }}
           >
             <option value="">ผู้ส่งทั้งหมด</option>
+            <option value={SORT_ALL}>{SORT_ALL_LABEL}</option>
             {senders.map(([id, name]) => (
               <option key={id} value={id}>
                 {name}
@@ -571,17 +616,32 @@ export default function DeliveryWork() {
           <SearchableSelect
             className="loading-searchable-filter"
             ariaLabel="กรองสินค้า"
-            value={product}
+            value={product || (sort === "PRODUCT" ? SORT_ALL : "")}
             emptyLabel="สินค้าทั้งหมด"
-            options={products.map((name) => ({ id: name, label: name }))}
-            onChange={setProduct}
+            options={[
+              { id: SORT_ALL, label: SORT_ALL_LABEL },
+              ...products.map((name) => ({ id: name, label: name })),
+            ]}
+            onChange={(value) => {
+              setProduct(value === SORT_ALL ? "" : value);
+              if (value === SORT_ALL) setSort("PRODUCT");
+              else if (sort === "PRODUCT") setSort("OLDEST");
+              if (value === SORT_ALL) setGroup("NONE");
+            }}
           />
           <select
             aria-label="กรองหน่วยนับ"
-            value={unit}
-            onChange={(event) => setUnit(event.target.value)}
+            value={unit || (sort === "UNIT" ? SORT_ALL : "")}
+            onChange={(event) => {
+              const value = event.target.value;
+              setUnit(value === SORT_ALL ? "" : value);
+              if (value === SORT_ALL) setSort("UNIT");
+              else if (sort === "UNIT") setSort("OLDEST");
+              if (value === SORT_ALL) setGroup("NONE");
+            }}
           >
             <option value="">ทุกหน่วยนับ</option>
+            <option value={SORT_ALL}>{SORT_ALL_LABEL}</option>
             {units.map((name) => (
               <option key={name}>{name}</option>
             ))}
@@ -655,12 +715,18 @@ export default function DeliveryWork() {
             <select
               aria-label="เรียงรายการ"
               value={sort}
-              onChange={(event) => setSort(event.target.value as Sort)}
+              onChange={(event) => {
+                setSort(event.target.value as Sort);
+                setGroup("NONE");
+              }}
             >
               <option value="OLDEST">วันที่เปิดบิลเก่าสุดก่อน</option>
               <option value="NEWEST">วันที่เปิดบิลใหม่สุดก่อน</option>
-              <option value="RECEIVER">ผู้รับ ก-ฮ</option>
-              <option value="SENDER">ผู้ส่ง ก-ฮ</option>
+              {listSortOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
               <option value="QUANTITY">จำนวนมากก่อน</option>
             </select>
           </label>
@@ -706,6 +772,7 @@ export default function DeliveryWork() {
                   <th>รายการสินค้า</th>
                   <th>อำเภอ</th>
                   <th>ชำระเงิน</th>
+                  <th>ยอดบิล</th>
                   <th>คงเหลือ</th>
                   <th>อายุบิล</th>
                 </tr>
@@ -739,6 +806,11 @@ export default function DeliveryWork() {
                     </td>
                     <td>{bill.district}</td>
                     <td>{PAYMENT_LABELS[bill.paymentMode]}</td>
+                    <td>
+                      {bill.totalAmount === null
+                        ? "–"
+                        : `฿${money(bill.totalAmount)}`}
+                    </td>
                     <td>
                       <strong>{number(quantity(bill))}</strong>
                       {bill.partial && <small>ส่งบางส่วน</small>}
