@@ -19,7 +19,10 @@ import {
   buildCodSummary,
   codCollectionStatus,
   dateKey,
+  matchesCodDeliveryFilter,
   matchingBills,
+  withRecordedDeliveryDates,
+  type CodDeliveryFilter,
   type CodCollectionStatus,
 } from "./codCollection";
 import { billEditAccessMessage, canEditShipment } from "./billEditPolicy";
@@ -112,6 +115,8 @@ export default function CashCollection() {
   const [query, setQuery] = useState("");
   const [deliveryFrom, setDeliveryFrom] = useState("");
   const [deliveryTo, setDeliveryTo] = useState("");
+  const [deliveryState, setDeliveryState] = useState<CodDeliveryFilter>("");
+  const [matchingIds, setMatchingIds] = useState<string[]>([]);
   const [receiver, setReceiver] = useState("");
   const [sender, setSender] = useState("");
   const [catalogId, setCatalogId] = useState("");
@@ -134,10 +139,17 @@ export default function CashCollection() {
         loadCodShipments(w.service),
         w.service.codPayments(),
       ]);
-      setRows(nextRows);
+      const undatedIds = nextRows
+        .filter((row) => !row.delivered_at)
+        .map((row) => row.id);
+      const deliveryLines = undatedIds.length
+        ? await w.service.deliveryLines(undatedIds)
+        : [];
+      const datedRows = withRecordedDeliveryDates(nextRows, deliveryLines);
+      setRows(datedRows);
       setPayments(nextPayments);
       setSelected((current) =>
-        current ? nextRows.find((row) => row.id === current.id) || null : null,
+        current ? datedRows.find((row) => row.id === current.id) || null : null,
       );
       setFailure("");
       loadedOnce.current = true;
@@ -273,13 +285,9 @@ export default function CashCollection() {
   const visible = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("th");
     return rows
-      .filter((row) => {
-        const delivered = dateKey(row.delivered_at);
-        return (
-          (!deliveryFrom || delivered >= deliveryFrom) &&
-          (!deliveryTo || delivered <= deliveryTo)
-        );
-      })
+      .filter((row) =>
+        matchesCodDeliveryFilter(row, deliveryState, deliveryFrom, deliveryTo),
+      )
       .filter(
         (row) =>
           !normalized ||
@@ -355,6 +363,7 @@ export default function CashCollection() {
     branch,
     catalogId,
     deliveryFrom,
+    deliveryState,
     deliveryTo,
     district,
     priceState,
@@ -372,6 +381,7 @@ export default function CashCollection() {
   const hasFilters = Boolean(
     query ||
     deliveryFrom ||
+    deliveryState ||
     deliveryTo ||
     receiver ||
     sender ||
@@ -385,6 +395,7 @@ export default function CashCollection() {
   );
 
   function chooseBill(row: Shipment) {
+    setMatchingIds([]);
     if (row.outstanding_amount <= 0) {
       w.toast(`บิล ${row.shipment_no} เก็บเงินครบแล้ว`, true);
       setInvoice("");
@@ -404,6 +415,7 @@ export default function CashCollection() {
   }
 
   function findBill() {
+    setMatchingIds([]);
     const matches = matchingBills(rows, invoice);
     if (!matches.length) {
       w.toast(`ไม่พบบิล ${invoice.trim() || "ที่ระบุ"} ในรายการ COD`, true);
@@ -411,14 +423,14 @@ export default function CashCollection() {
       return;
     }
     if (matches.length > 1) {
-      w.toast("พบเลขท้ายบิลซ้ำ กรุณาพิมพ์หรือสแกนเลขบิลเต็ม", true);
-      invoiceRef.current?.select();
+      setMatchingIds(matches.map((row) => row.id));
       return;
     }
     chooseBill(matches[0]);
   }
 
   function clearSelection() {
+    setMatchingIds([]);
     setSelected(null);
     setInvoice("");
     setAmount("");
@@ -487,6 +499,7 @@ export default function CashCollection() {
     setQuery("");
     setDeliveryFrom("");
     setDeliveryTo("");
+    setDeliveryState("");
     setReceiver("");
     setSender("");
     setCatalogId("");
@@ -580,6 +593,7 @@ export default function CashCollection() {
                 value={invoice}
                 onChange={(event) => {
                   setInvoice(event.target.value);
+                  setMatchingIds([]);
                   if (selected) setSelected(null);
                 }}
               />
@@ -595,7 +609,31 @@ export default function CashCollection() {
             <small>กด Enter เพื่อไปที่ช่องยอดรับเงินจริง</small>
           </form>
 
-          {selected ? (
+          {matchingIds.length > 1 ? (
+            <div className="cod-candidates" aria-label="เลือกบิลจากเลขที่ซ้ำ">
+              <strong>พบ {number(matchingIds.length)} บิลที่ตรงกับเลขนี้</strong>
+              <span>ตรวจเลขเต็มและผู้รับก่อนเลือกรับเงิน</span>
+              <div className="cod-candidate-list">
+                {matchingIds.flatMap((id) => {
+                  const row = rows.find((item) => item.id === id);
+                  return row
+                    ? [
+                        <button
+                          key={row.id}
+                          type="button"
+                          onClick={() => chooseBill(row)}
+                        >
+                          <b>{row.shipment_no}</b>
+                          <span>{row.receiver_snapshot.display_name}</span>
+                          <span>{row.zone_name}</span>
+                          <strong>ค้าง ฿ {money(row.outstanding_amount)}</strong>
+                        </button>,
+                      ]
+                    : [];
+                })}
+              </div>
+            </div>
+          ) : selected ? (
             <form
               className="cod-payment-form"
               onSubmit={(event) => {
@@ -704,6 +742,7 @@ export default function CashCollection() {
             <label className="shipment-filter-control">
               <span>ส่งของตั้งแต่วันที่</span>
               <DateInput
+                disabled={deliveryState === "NOT_SENT"}
                 max={deliveryTo || undefined}
                 value={deliveryFrom}
                 onChange={(value) => {
@@ -715,6 +754,7 @@ export default function CashCollection() {
             <label className="shipment-filter-control">
               <span>ถึงวันที่</span>
               <DateInput
+                disabled={deliveryState === "NOT_SENT"}
                 min={deliveryFrom || undefined}
                 value={deliveryTo}
                 onChange={(value) => {
@@ -722,6 +762,25 @@ export default function CashCollection() {
                   setPage(0);
                 }}
               />
+            </label>
+            <label className="shipment-filter-control">
+              <span>สถานะการส่งของ</span>
+              <select
+                value={deliveryState}
+                onChange={(event) => {
+                  const next = event.target.value as CodDeliveryFilter;
+                  setDeliveryState(next);
+                  if (next === "NOT_SENT") {
+                    setDeliveryFrom("");
+                    setDeliveryTo("");
+                  }
+                  setPage(0);
+                }}
+              >
+                <option value="">แสดงทั้งหมด</option>
+                <option value="SENT">ส่งของแล้ว</option>
+                <option value="NOT_SENT">ยังไม่ส่งของ</option>
+              </select>
             </label>
             <label className="shipment-filter-control">
               <span>ผู้รับ</span>

@@ -2,6 +2,7 @@ import * as api from "./api";
 import { compareListSort, firstItemName } from "./listSort";
 import {
   createDemoShipment,
+  demoDestinationCode,
   demoProducts,
   demoZones,
   loadDemo,
@@ -69,10 +70,24 @@ function withDemoPayments<T extends Shipment>(shipment: T): T {
 function allDemoShipments() {
   const local = readReceptionBills().map(receptionBillToShipment);
   const localIds = new Set(local.map((row) => row.id));
+  const state = loadDemo();
   return [
     ...local,
-    ...loadDemo().shipments.filter((row) => !localIds.has(row.id)),
-  ].map(withDemoPayments);
+    ...state.shipments.filter((row) => !localIds.has(row.id)),
+  ].map((row) =>
+    withDemoPayments(
+      row.destination_branch_code
+        ? row
+        : {
+            ...row,
+            destination_branch_code: demoDestinationCode(
+              row.zone_id,
+              row.district_id,
+              state.branches,
+            ),
+          },
+    ),
+  );
 }
 
 const DEMO_LOADS_KEY = "ntdtms-loading-manifests-v2";
@@ -779,12 +794,15 @@ export function createService(demo: boolean) {
                 }),
         }));
     },
-    deliveryLines: async () => {
-      if (!demo) return api.getDeliveryLines();
+    deliveryLines: async (shipmentIds?: string[]) => {
+      if (!demo) return api.getDeliveryLines(shipmentIds);
       try {
-        return JSON.parse(
+        const lines = JSON.parse(
           localStorage.getItem("ntdtms-delivery-lines-v1") || "[]",
         ) as import("./types").DeliveryLineRecord[];
+        if (!shipmentIds) return lines;
+        const selected = new Set(shipmentIds);
+        return lines.filter((line) => selected.has(line.shipmentId));
       } catch {
         return [];
       }

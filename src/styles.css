@@ -4222,6 +4222,50 @@ table {
 .cod-ready span {
   font-size: 13px;
 }
+.cod-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 0 18px 24px;
+  min-width: 0;
+}
+.cod-candidates > strong {
+  color: #314e42;
+}
+.cod-candidates > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.cod-candidate-list {
+  display: grid;
+  gap: 6px;
+  max-height: 215px;
+  margin-top: 5px;
+  overflow-y: auto;
+}
+.cod-candidate-list button {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(100px, 1fr) minmax(80px, 0.8fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: #334c41;
+  text-align: left;
+  cursor: pointer;
+}
+.cod-candidate-list button:hover,
+.cod-candidate-list button:focus-visible {
+  border-color: var(--green-dark);
+  background: #f1f8f4;
+}
+.cod-candidate-list button b,
+.cod-candidate-list button strong {
+  color: var(--green-dark);
+}
 .cod-payment-form {
   display: grid;
   align-content: center;
@@ -4468,6 +4512,9 @@ table {
   .cod-payment-form {
     padding-left: 0;
   }
+  .cod-candidates {
+    padding-left: 0;
+  }
   .cod-filter-bar {
     grid-template-columns: repeat(3, minmax(145px, 1fr));
   }
@@ -4495,6 +4542,9 @@ table {
   .cod-scan-form input,
   .cod-scan-form .button {
     border-radius: 5px;
+  }
+  .cod-candidate-list button {
+    grid-template-columns: 1fr 1fr;
   }
   .cod-selected-heading,
   .cod-selected-heading > div {
