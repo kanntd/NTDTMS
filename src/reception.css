@@ -1587,6 +1587,11 @@
 .pending-price-table td {
   max-width: 240px;
 }
+.ops-table td.pricing-empty-cell {
+  padding: 42px 12px;
+  color: #718178;
+  text-align: center;
+}
 .pending-price-table th:nth-child(13),
 .pending-price-table td:nth-child(13) {
   min-width: 190px;

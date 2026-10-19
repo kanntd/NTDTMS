@@ -48,7 +48,6 @@ import { intakeAmounts, onePercent } from "./intakeMath";
 import { PAYMENT_LABELS, type PaymentMode, type Role } from "./types";
 import {
   Button,
-  Empty,
   Field,
   IconButton,
   Loading,
@@ -1827,7 +1826,7 @@ function CurrentPrices({
   );
 }
 
-function PendingPrices({
+export function PendingPrices({
   rows,
   recommendations,
   operations,
@@ -1846,12 +1845,6 @@ function PendingPrices({
   const versionById = new Map(
     operations.priceVersions.map((version) => [version.id, version]),
   );
-  if (!rows.length)
-    return (
-      <Empty title="ไม่มีรายการรอตรวจราคา">
-        <p>เมื่อบันทึกบิลโดยเลือกขอราคา รายการจะมาที่หน้านี้โดยอัตโนมัติ</p>
-      </Empty>
-    );
   return (
     <div className="ops-table-wrap pending-price-table-wrap">
       <table className="ops-table pricing-table pending-price-table">
@@ -1868,6 +1861,16 @@ function PendingPrices({
           </tr>
         </thead>
         <tbody>
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={14} className="pricing-empty-cell">
+                <strong>ไม่มีรายการรอตรวจราคา</strong>
+                <small>
+                  เมื่อบันทึกบิลโดยเลือกขอราคา รายการจะมาที่หน้านี้โดยอัตโนมัติ
+                </small>
+              </td>
+            </tr>
+          )}
           {rows.map((row, index) => {
             const recommendation = recommendations.get(row.id)!;
             const agreement = agreementByKey.get(row.key);
