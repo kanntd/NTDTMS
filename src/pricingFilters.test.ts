@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canReviewPriceRequest,
+  canSubmitPriceReview,
   isWithinPriceHistoryRange,
   isWithinPriceRequestRange,
   matchesPriceFilters,
@@ -134,6 +135,16 @@ describe("pricing filters", () => {
     expect(canReviewPriceRequest("accountant")).toBe(true);
     expect(canReviewPriceRequest("clerk")).toBe(false);
     expect(canReviewPriceRequest("viewer")).toBe(false);
+  });
+
+  it("shows the accounting result below an open proposal only to reviewers", () => {
+    expect(canSubmitPriceReview("owner", "PENDING_PRICE")).toBe(true);
+    expect(canSubmitPriceReview("admin", "RETURNED")).toBe(true);
+    expect(canSubmitPriceReview("accountant", "PENDING_APPROVAL")).toBe(true);
+    expect(canSubmitPriceReview("clerk", "PENDING_PRICE")).toBe(false);
+    expect(canSubmitPriceReview("viewer", "PENDING_APPROVAL")).toBe(false);
+    expect(canSubmitPriceReview("owner", "RESOLVED")).toBe(false);
+    expect(canSubmitPriceReview("admin", "CANCELLED")).toBe(false);
   });
 
   it("includes resolved and cancelled requests only when all rows are requested", () => {

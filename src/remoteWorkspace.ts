@@ -7,6 +7,31 @@ import type { PaymentMode } from "./types";
 
 type JsonRecord = Record<string, unknown>;
 
+export function remoteWorkspaceErrorMessage(error: unknown) {
+  if (!error || typeof error !== "object") return "เกิดข้อผิดพลาด";
+  const value = error as {
+    code?: unknown;
+    message?: unknown;
+    details?: unknown;
+    hint?: unknown;
+  };
+  const code = text(value.code);
+  const message = text(value.message);
+  if (code === "PGRST202")
+    return "ฐานข้อมูลยังไม่ได้ติดตั้งฟังก์ชันงานเสนอราคา กรุณาติดตั้ง migration ล่าสุดก่อนใช้งาน";
+  return (
+    [message, text(value.details), text(value.hint)]
+      .filter(Boolean)
+      .join(" · ") ||
+    code ||
+    "เกิดข้อผิดพลาด"
+  );
+}
+
+const throwRemoteWorkspaceError = (error: unknown) => {
+  throw new Error(remoteWorkspaceErrorMessage(error));
+};
+
 export type RemoteWorkspace = {
   registry: IntakeRegistrySnapshot;
   operations: OperationsState;
@@ -353,7 +378,7 @@ export async function resolveRemotePriceRequest(
     resolution_type: resolutionType,
     approval_note: approvalNote,
   });
-  if (result.error) throw result.error;
+  if (result.error) throwRemoteWorkspaceError(result.error);
   return result.data as {
     request_id: string;
     affected_requests: number;
@@ -373,7 +398,7 @@ export async function submitRemotePriceProposal(
     actual_collected_amount: actualCollectedAmount,
     proposal_note: proposalNote,
   });
-  if (result.error) throw result.error;
+  if (result.error) throwRemoteWorkspaceError(result.error);
   return result.data as {
     request_id: string;
     status: "PENDING_APPROVAL";
@@ -381,6 +406,31 @@ export async function submitRemotePriceProposal(
     actual_collected_amount: number | null;
     note: string;
     submitted_at: string;
+  };
+}
+
+export async function submitAndResolveRemotePriceRequest(
+  requestId: string,
+  proposedPrice: number,
+  approvedPrice: number,
+  actualCollectedAmount: number | null,
+  resolutionType: "STANDARD" | "BILL_ONLY",
+  note: string,
+) {
+  const result = await supabase.rpc("submit_and_resolve_price_request", {
+    request_id: requestId,
+    proposed_price: proposedPrice,
+    approved_price: approvedPrice,
+    actual_collected_amount: actualCollectedAmount,
+    resolution_type: resolutionType,
+    proposal_note: note,
+    approval_note: note,
+  });
+  if (result.error) throwRemoteWorkspaceError(result.error);
+  return result.data as {
+    request_id: string;
+    affected_requests: number;
+    price_version_id: string | null;
   };
 }
 
@@ -392,7 +442,7 @@ export async function returnRemotePriceRequest(
     request_id: requestId,
     return_reason: returnReason,
   });
-  if (result.error) throw result.error;
+  if (result.error) throwRemoteWorkspaceError(result.error);
   return result.data as {
     request_id: string;
     status: "RETURNED";
