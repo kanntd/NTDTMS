@@ -62,6 +62,7 @@ export interface PriceVersion {
 
 export interface PriceRequest {
   id: string;
+  shipmentItemId?: string;
   key: string;
   receiverId: string;
   senderId: string;

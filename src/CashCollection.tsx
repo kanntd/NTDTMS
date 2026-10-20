@@ -29,6 +29,14 @@ import {
 import { billEditAccessMessage, canEditShipment } from "./billEditPolicy";
 import { compareBillsByOpenedAt } from "./billNumber";
 import { useWorkspace } from "./context";
+import {
+  adjustedCodAmounts,
+  codLineTotal,
+  isCurrencyAmount,
+  knownCodPrices,
+  type CodPaymentMethod,
+  type CodPaymentMethodOption,
+} from "./codPricing";
 import DateInput from "./DateInput";
 import { loadIntakeRegistry } from "./intakeRegistry";
 import { loadOperations } from "./operationsStore";
@@ -110,8 +118,20 @@ export default function CashCollection() {
   const [invoice, setInvoice] = useState("");
   const [selected, setSelected] = useState<Shipment | null>(null);
   const [amount, setAmount] = useState("");
+  const [amountTouched, setAmountTouched] = useState(false);
+  const [itemPrices, setItemPrices] = useState<Record<string, string>>({});
+  const [discount, setDiscount] = useState("0.00");
+  const [expectedDiscount, setExpectedDiscount] = useState(0);
   const [method, setMethod] = useState("CASH");
-  const [reference, setReference] = useState("");
+  const [methodOptions, setMethodOptions] = useState<CodPaymentMethodOption[]>(
+    [],
+  );
+  const [addingMethod, setAddingMethod] = useState(false);
+  const [newMethodName, setNewMethodName] = useState("");
+  const [newMethodCategory, setNewMethodCategory] =
+    useState<CodPaymentMethod>("TRANSFER");
+  const [savingMethod, setSavingMethod] = useState(false);
+  const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
   const [deliveryFrom, setDeliveryFrom] = useState("");
@@ -168,6 +188,30 @@ export default function CashCollection() {
   useEffect(() => {
     void reload();
   }, [reload, w.revision]);
+
+  useEffect(() => {
+    let active = true;
+    void w.service
+      .codPaymentMethods()
+      .then((options) => {
+        if (active) setMethodOptions(options);
+      })
+      .catch((cause) => {
+        if (active) w.toast((cause as Error).message, true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [w.service]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const frame = requestAnimationFrame(() => {
+      amountRef.current?.focus();
+      amountRef.current?.select();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selected?.id]);
 
   useEffect(() => {
     if (w.demo) {
@@ -402,6 +446,23 @@ export default function CashCollection() {
     vehicle ||
     sort !== "OLDEST",
   );
+  const discountValue = Number(discount || 0);
+  const adjustedSelected =
+    selected && Number.isFinite(discountValue)
+      ? adjustedCodAmounts(selected, discountValue)
+      : null;
+  const knownItemTotal = (selected?.items || []).reduce((sum, item) => {
+    const entered = itemPrices[item.id]?.trim();
+    const price = Number(entered);
+    return entered && Number.isFinite(price) && price >= 0
+      ? sum + codLineTotal(item, price)
+      : sum;
+  }, 0);
+  const originalItemSubtotal = selected
+    ? selected.total_amount + selected.discount - selected.extra_charge
+    : 0;
+  const remainingItemValue =
+    Math.round((originalItemSubtotal - knownItemTotal) * 100) / 100;
 
   function chooseBill(row: Shipment) {
     setMatchingIds([]);
@@ -414,13 +475,21 @@ export default function CashCollection() {
     setSelected(row);
     setInvoice(row.shipment_no);
     setAmount(row.outstanding_amount.toFixed(2));
+    setAmountTouched(false);
+    setDiscount(Number(row.discount || 0).toFixed(2));
+    setExpectedDiscount(Number(row.discount || 0));
+    setItemPrices(
+      Object.fromEntries(
+        (row.items || []).map((item) => [
+          item.id,
+          item.price_pending ? "" : Number(item.unit_price || 0).toFixed(2),
+        ]),
+      ),
+    );
     setMethod("CASH");
-    setReference("");
+    setNote("");
+    setAddingMethod(false);
     requestRef.current = crypto.randomUUID();
-    window.setTimeout(() => {
-      amountRef.current?.focus();
-      amountRef.current?.select();
-    });
   }
 
   function findBill() {
@@ -449,44 +518,115 @@ export default function CashCollection() {
     setSelected(null);
     setInvoice("");
     setAmount("");
-    setReference("");
+    setAmountTouched(false);
+    setItemPrices({});
+    setDiscount("0.00");
+    setExpectedDiscount(0);
+    setNote("");
+    setAddingMethod(false);
     requestRef.current = crypto.randomUUID();
     window.setTimeout(() => invoiceRef.current?.focus());
+  }
+
+  async function addMethod() {
+    if (savingMethod) return;
+    const label = newMethodName.trim();
+    if (!label) {
+      w.toast("กรุณาระบุชื่อวิธีรับเงิน", true);
+      return;
+    }
+    setSavingMethod(true);
+    try {
+      const id = await w.service.addCodPaymentMethod(label, newMethodCategory);
+      setMethodOptions(await w.service.codPaymentMethods());
+      setMethod(`CUSTOM:${id}`);
+      setNewMethodName("");
+      setAddingMethod(false);
+    } catch (cause) {
+      w.toast((cause as Error).message || "เพิ่มวิธีรับเงินไม่สำเร็จ", true);
+    } finally {
+      setSavingMethod(false);
+    }
   }
 
   async function saveCollection() {
     if (!selected || saving) return;
     const value = Number(amount);
+    const newDiscount = Number(discount || 0);
+    if (!isCurrencyAmount(newDiscount) || newDiscount < 0) {
+      w.toast("ส่วนลดต้องเป็นจำนวนเงินที่ถูกต้อง", true);
+      return;
+    }
+    const adjusted = adjustedCodAmounts(selected, newDiscount);
     if (
-      !Number.isFinite(value) ||
+      !isCurrencyAmount(value) ||
       value <= 0 ||
-      value > selected.outstanding_amount
+      adjusted.total <= 0 ||
+      value > adjusted.outstanding
     ) {
       w.toast(
-        `ยอดรับเงินจริงต้องมากกว่า 0 และไม่เกิน ${money(selected.outstanding_amount)} บาท`,
+        `ยอดรับเงินจริงต้องมากกว่า 0 และไม่เกิน ${money(Math.max(0, adjusted.outstanding))} บาท หลังหักส่วนลด`,
         true,
       );
       amountRef.current?.focus();
       amountRef.current?.select();
       return;
     }
+    let prices;
+    try {
+      prices = knownCodPrices(selected.items || [], itemPrices).lines;
+    } catch (cause) {
+      w.toast((cause as Error).message, true);
+      return;
+    }
+    const customMethod = method.startsWith("CUSTOM:")
+      ? methodOptions.find((option) => option.id === method.slice(7))
+      : null;
+    if (method.startsWith("CUSTOM:") && !customMethod) {
+      w.toast("กรุณาเลือกวิธีรับเงินอีกครั้ง", true);
+      return;
+    }
     setSaving(true);
     try {
-      await w.service.collect(
-        selected.id,
-        value,
-        method,
-        reference.trim(),
-        requestRef.current,
+      await w.service.collectCod({
+        shipment_id: selected.id,
+        amount: value,
+        method: customMethod?.base_method || (method as CodPaymentMethod),
+        method_option_id: customMethod?.id || null,
+        note: note.trim(),
+        discount: newDiscount,
+        expected_discount: expectedDiscount,
+        items: prices,
+        request_id: requestRef.current,
+      });
+      const remaining = Math.max(0, adjusted.outstanding - value);
+      setRows((current) =>
+        current.map((row) =>
+          row.id === selected.id
+            ? {
+                ...row,
+                discount: newDiscount,
+                total_amount: adjusted.total,
+                paid_amount: row.paid_amount + value,
+                outstanding_amount: remaining,
+              }
+            : row,
+        ),
       );
-      const remaining = Math.max(0, selected.outstanding_amount - value);
+      setPayments((current) => [
+        {
+          shipmentId: selected.id,
+          amount: value,
+          receivedAt: new Date().toISOString(),
+        },
+        ...current,
+      ]);
       w.toast(
         remaining > 0
           ? `รับเงินบิล ${selected.shipment_no} แล้ว เหลือ ${money(remaining)} บาท`
           : `รับเงินบิล ${selected.shipment_no} ครบแล้ว`,
       );
       clearSelection();
-      w.refresh();
     } catch (cause) {
       w.toast((cause as Error).message || "บันทึกรับเงินไม่สำเร็จ", true);
       amountRef.current?.focus();
@@ -626,7 +766,9 @@ export default function CashCollection() {
 
           {matchingIds.length > 1 ? (
             <div className="cod-candidates" aria-label="เลือกบิลจากเลขที่ซ้ำ">
-              <strong>พบ {number(matchingIds.length)} บิลที่ตรงกับเลขนี้</strong>
+              <strong>
+                พบ {number(matchingIds.length)} บิลที่ตรงกับเลขนี้
+              </strong>
               <span>ตรวจเลขเต็มและผู้รับก่อนเลือกรับเงิน</span>
               <div className="cod-candidate-list">
                 {matchingIds.flatMap((id) => {
@@ -641,7 +783,9 @@ export default function CashCollection() {
                           <b>{row.shipment_no}</b>
                           <span>{row.receiver_snapshot.display_name}</span>
                           <span>{row.zone_name}</span>
-                          <strong>ค้าง ฿ {money(row.outstanding_amount)}</strong>
+                          <strong>
+                            ค้าง ฿ {money(row.outstanding_amount)}
+                          </strong>
                         </button>,
                       ]
                     : [];
@@ -667,15 +811,124 @@ export default function CashCollection() {
               </div>
               <div className="cod-selected-totals">
                 <span>
-                  ยอดบิล <b>{money(selected.total_amount)}</b>
+                  ยอดบิล{" "}
+                  <b>
+                    {money(adjustedSelected?.total ?? selected.total_amount)}
+                  </b>
                 </span>
                 <span>
                   รับแล้ว <b>{money(selected.paid_amount)}</b>
                 </span>
                 <span>
-                  ค้างเก็บ <strong>{money(selected.outstanding_amount)}</strong>
+                  ค้างเก็บ{" "}
+                  <strong>
+                    {money(
+                      adjustedSelected?.outstanding ??
+                        selected.outstanding_amount,
+                    )}
+                  </strong>
                 </span>
               </div>
+              <div className="cod-items-heading">
+                <strong>รายการสินค้าในบิล</strong>
+                <span>ใส่ราคาต่อหน่วยเฉพาะรายการที่ทราบ เว้นว่างได้</span>
+              </div>
+              <div className="cod-items-wrap">
+                <table className="cod-items-table">
+                  <thead>
+                    <tr>
+                      <th>สินค้า / หน่วย</th>
+                      <th>จำนวน</th>
+                      <th>ราคาต่อหน่วย (บาท)</th>
+                      <th>ราคารวม (บาท)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(selected.items || []).map((item) => {
+                      const raw = itemPrices[item.id] || "";
+                      const price = Number(raw);
+                      return (
+                        <tr key={item.id}>
+                          <td>
+                            {item.description} / {item.unit}
+                          </td>
+                          <td>{number(item.quantity)}</td>
+                          <td>
+                            <input
+                              aria-label={`ราคาต่อหน่วย ${item.description}`}
+                              type="number"
+                              inputMode="decimal"
+                              min="0"
+                              step="0.01"
+                              placeholder="ยังไม่ทราบ"
+                              value={raw}
+                              onChange={(event) =>
+                                setItemPrices((current) => ({
+                                  ...current,
+                                  [item.id]: event.target.value,
+                                }))
+                              }
+                            />
+                          </td>
+                          <td>
+                            {raw && Number.isFinite(price) && price >= 0
+                              ? money(codLineTotal(item, price))
+                              : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {!selected.items?.length && (
+                      <tr>
+                        <td colSpan={4}>ไม่พบรายการสินค้าในบิล</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <label className="cod-discount-field">
+                <span>ส่วนลดทั้งบิล (บาท)</span>
+                <input
+                  aria-label="ส่วนลดทั้งบิล"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.01"
+                  value={discount}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setDiscount(next);
+                    if (!amountTouched && Number.isFinite(Number(next))) {
+                      const adjusted = adjustedCodAmounts(
+                        selected,
+                        Number(next || 0),
+                      );
+                      setAmount(Math.max(0, adjusted.outstanding).toFixed(2));
+                    }
+                  }}
+                />
+              </label>
+              <div className="cod-items-summary">
+                <span>
+                  รวมรายการที่ทราบ <b>฿ {money(knownItemTotal)}</b>
+                </span>
+                <span>
+                  ส่วนลด{" "}
+                  <b>
+                    ฿{" "}
+                    {money(Number.isFinite(discountValue) ? discountValue : 0)}
+                  </b>
+                </span>
+                <span>
+                  {remainingItemValue >= 0
+                    ? "ส่วนต่างที่ยังไม่ระบุ"
+                    : "ราคาที่กรอกเกินยอดสินค้า"}
+                  <b>฿ {money(Math.abs(remainingItemValue))}</b>
+                </span>
+              </div>
+              <small className="cod-items-hint">
+                ราคารวมคำนวณจากจำนวน × ราคาต่อหน่วย ราคาใหม่ส่งให้บัญชียืนยัน
+              </small>
               <div className="cod-payment-fields">
                 <label className="cod-amount-field">
                   <span>ยอดรับเงินจริง (บาท)</span>
@@ -687,10 +940,17 @@ export default function CashCollection() {
                       type="number"
                       inputMode="decimal"
                       min="0.01"
-                      max={selected.outstanding_amount}
+                      max={Math.max(
+                        0,
+                        adjustedSelected?.outstanding ??
+                          selected.outstanding_amount,
+                      )}
                       step="0.01"
                       value={amount}
-                      onChange={(event) => setAmount(event.target.value)}
+                      onChange={(event) => {
+                        setAmount(event.target.value);
+                        setAmountTouched(true);
+                      }}
                       required
                     />
                   </div>
@@ -699,19 +959,32 @@ export default function CashCollection() {
                   <span>วิธีรับเงิน</span>
                   <select
                     value={method}
-                    onChange={(event) => setMethod(event.target.value)}
+                    onChange={(event) => {
+                      if (event.target.value === "ADD") setAddingMethod(true);
+                      else {
+                        setMethod(event.target.value);
+                        setAddingMethod(false);
+                      }
+                    }}
                   >
                     <option value="CASH">เงินสด</option>
-                    <option value="TRANSFER">โอนธนาคาร</option>
+                    <option value="TRANSFER">โอน</option>
                     <option value="QR">QR Payment</option>
+                    {methodOptions.map((option) => (
+                      <option key={option.id} value={`CUSTOM:${option.id}`}>
+                        {option.label}
+                      </option>
+                    ))}
+                    <option value="ADD">+ เพิ่มวิธีรับเงิน</option>
                   </select>
                 </label>
                 <label>
-                  <span>เลขอ้างอิง</span>
+                  <span>หมายเหตุ</span>
                   <input
-                    placeholder="ไม่บังคับ"
-                    value={reference}
-                    onChange={(event) => setReference(event.target.value)}
+                    placeholder="พิมพ์หมายเหตุ (ไม่บังคับ)"
+                    maxLength={500}
+                    value={note}
+                    onChange={(event) => setNote(event.target.value)}
                   />
                 </label>
                 <Button className="primary" type="submit" busy={saving}>
@@ -719,6 +992,45 @@ export default function CashCollection() {
                   บันทึกรับเงิน
                 </Button>
               </div>
+              {addingMethod && (
+                <div className="cod-add-method">
+                  <label>
+                    ชื่อวิธีรับเงิน
+                    <input
+                      autoFocus
+                      maxLength={80}
+                      value={newMethodName}
+                      onChange={(event) => setNewMethodName(event.target.value)}
+                      placeholder="พิมพ์ชื่อวิธีรับเงิน"
+                    />
+                  </label>
+                  <label>
+                    ประเภท
+                    <select
+                      value={newMethodCategory}
+                      onChange={(event) =>
+                        setNewMethodCategory(
+                          event.target.value as CodPaymentMethod,
+                        )
+                      }
+                    >
+                      <option value="CASH">เงินสด</option>
+                      <option value="TRANSFER">โอน</option>
+                      <option value="QR">QR Payment</option>
+                    </select>
+                  </label>
+                  <Button
+                    type="button"
+                    onClick={() => void addMethod()}
+                    busy={savingMethod}
+                  >
+                    เพิ่มรายการ
+                  </Button>
+                  <button type="button" onClick={() => setAddingMethod(false)}>
+                    ยกเลิก
+                  </button>
+                </div>
+              )}
             </form>
           ) : (
             <div className="cod-ready">
