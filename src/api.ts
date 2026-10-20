@@ -22,6 +22,11 @@ import type {
   CodPaymentRecord,
 } from "./types";
 import { applyRecordedLoads } from "./loadingQueue";
+import type {
+  CodCollectionInput,
+  CodPaymentMethod,
+  CodPaymentMethodOption,
+} from "./codPricing";
 import { chunkValues } from "./queryChunks";
 
 export type ShipmentSummary = Pick<
@@ -458,6 +463,30 @@ export async function collectPayment(
       request,
     }),
   );
+}
+export async function collectCodPayment(data: CodCollectionInput) {
+  const result = await supabase.rpc("collect_cod_payment", { data });
+  return check(result) as { payment_id: string; submitted_prices: number };
+}
+export async function getCodPaymentMethods(): Promise<
+  CodPaymentMethodOption[]
+> {
+  const result = await supabase
+    .from("cod_payment_methods")
+    .select("id,label,base_method")
+    .eq("is_active", true)
+    .order("label");
+  return check(result) as CodPaymentMethodOption[];
+}
+export async function addCodPaymentMethod(
+  label: string,
+  category: CodPaymentMethod,
+) {
+  const result = await supabase.rpc("add_cod_payment_method", {
+    method_label: label,
+    category,
+  });
+  return check(result) as string;
 }
 export async function getCodPayments(): Promise<CodPaymentRecord[]> {
   const rows: CodPaymentRecord[] = [];

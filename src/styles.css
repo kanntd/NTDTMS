@@ -4245,7 +4245,9 @@ table {
 }
 .cod-candidate-list button {
   display: grid;
-  grid-template-columns: minmax(110px, 1fr) minmax(100px, 1fr) minmax(80px, 0.8fr) auto;
+  grid-template-columns:
+    minmax(110px, 1fr) minmax(100px, 1fr) minmax(80px, 0.8fr)
+    auto;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -4323,6 +4325,106 @@ table {
 }
 .cod-selected-totals strong {
   color: #a34b3d;
+}
+.cod-items-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  color: var(--green-dark);
+  font-size: 14px;
+}
+.cod-items-heading span,
+.cod-items-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.cod-items-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+.cod-items-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 550px;
+  text-align: left;
+}
+.cod-items-table th {
+  padding: 8px 10px;
+  background: #f6f9f7;
+  color: #60756a;
+  font-size: 12px;
+}
+.cod-items-table td {
+  padding: 7px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+.cod-items-table th:nth-child(2),
+.cod-items-table td:nth-child(2),
+.cod-items-table th:last-child,
+.cod-items-table td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cod-items-table input {
+  width: 100%;
+  min-width: 110px;
+  height: 35px;
+}
+.cod-discount-field {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  color: var(--green-dark);
+  font-size: 13px;
+  font-weight: 600;
+}
+.cod-discount-field input {
+  width: min(220px, 100%);
+  height: 37px;
+}
+.cod-items-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 12px;
+  background: #eef7f1;
+  color: #205844;
+  font-size: 12px;
+}
+.cod-items-summary span {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px;
+}
+.cod-items-hint {
+  margin-top: -7px;
+}
+.cod-add-method {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: #f8faf9;
+}
+.cod-add-method label {
+  display: grid;
+  gap: 4px;
+  color: #526158;
+  font-size: 12px;
+}
+.cod-add-method input,
+.cod-add-method select {
+  min-height: 37px;
+}
+.cod-add-method > button:last-child {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
 }
 .cod-payment-fields {
   display: grid;
@@ -4556,6 +4658,13 @@ table {
   }
   .cod-selected-totals {
     grid-template-columns: 1fr;
+  }
+  .cod-items-summary {
+    grid-template-columns: 1fr;
+  }
+  .cod-items-heading {
+    flex-direction: column;
+    gap: 2px;
   }
   .cod-payment-fields,
   .cod-filter-bar,

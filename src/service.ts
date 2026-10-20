@@ -10,7 +10,15 @@ import {
 } from "./demo";
 import { localDate } from "./domain";
 import { BRANCH_OPTIONS } from "./intakeData";
-import { loadOperations } from "./operationsStore";
+import { loadOperations, saveOperations } from "./operationsStore";
+import { pairRateKey } from "./intakeEntryData";
+import {
+  adjustedCodAmounts,
+  isCurrencyAmount,
+  type CodCollectionInput,
+  type CodPaymentMethod,
+  type CodPaymentMethodOption,
+} from "./codPricing";
 import type {
   DashboardStats,
   Party,
@@ -41,6 +49,26 @@ import {
 } from "./receptionStore";
 
 const DEMO_PAYMENTS_KEY = "ntdtms-demo-payments-v1";
+const DEMO_COD_ADJUSTMENTS_KEY = "ntdtms-demo-cod-adjustments-v1";
+const DEMO_COD_METHODS_KEY = "ntdtms-demo-cod-methods-v1";
+const DEMO_COD_REQUESTS_KEY = "ntdtms-demo-cod-requests-v1";
+
+function readDemoCodAdjustments(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem(DEMO_COD_ADJUSTMENTS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function readDemoCodMethods(): CodPaymentMethodOption[] {
+  try {
+    const rows = JSON.parse(localStorage.getItem(DEMO_COD_METHODS_KEY) || "[]");
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
 
 function readDemoPayments(): CodPaymentRecord[] {
   try {
@@ -56,14 +84,22 @@ function saveDemoPayments(rows: CodPaymentRecord[]) {
 }
 
 function withDemoPayments<T extends Shipment>(shipment: T): T {
+  const discount = readDemoCodAdjustments()[shipment.id] ?? shipment.discount;
   const recorded = readDemoPayments()
     .filter((row) => row.shipmentId === shipment.id)
     .reduce((sum, row) => sum + row.amount, 0);
-  const unreflected = Math.max(0, recorded - shipment.paid_amount);
+  const paid = Math.max(shipment.paid_amount, recorded);
+  const due =
+    shipment.paid_amount +
+    shipment.outstanding_amount +
+    shipment.discount -
+    discount;
   return {
     ...shipment,
-    paid_amount: Math.max(shipment.paid_amount, recorded),
-    outstanding_amount: Math.max(0, shipment.outstanding_amount - unreflected),
+    discount,
+    total_amount: shipment.total_amount + shipment.discount - discount,
+    paid_amount: paid,
+    outstanding_amount: Math.max(0, Math.round((due - paid) * 100) / 100),
   };
 }
 
@@ -390,6 +426,170 @@ export function createService(demo: boolean) {
           Math.round((current.outstanding_amount - amount) * 100) / 100;
         saveDemo(state);
       }
+    },
+    codPaymentMethods: async (): Promise<CodPaymentMethodOption[]> =>
+      demo ? readDemoCodMethods() : api.getCodPaymentMethods(),
+    addCodPaymentMethod: async (label: string, category: CodPaymentMethod) => {
+      if (!demo) return api.addCodPaymentMethod(label, category);
+      const clean = label.trim();
+      if (
+        !clean ||
+        clean.length > 80 ||
+        ["เงินสด", "โอน", "qr payment"].includes(clean.toLocaleLowerCase("th"))
+      )
+        throw new Error("ชื่อวิธีรับเงินไม่ถูกต้องหรือมีอยู่แล้ว");
+      const methods = readDemoCodMethods();
+      if (
+        methods.some(
+          (option) =>
+            option.label.toLocaleLowerCase("th") ===
+            clean.toLocaleLowerCase("th"),
+        )
+      )
+        throw new Error("วิธีรับเงินนี้มีอยู่แล้ว");
+      const id = crypto.randomUUID();
+      localStorage.setItem(
+        DEMO_COD_METHODS_KEY,
+        JSON.stringify([
+          ...methods,
+          { id, label: clean, base_method: category },
+        ]),
+      );
+      return id;
+    },
+    collectCod: async (input: CodCollectionInput) => {
+      if (!demo) return api.collectCodPayment(input);
+      const requests: Record<
+        string,
+        { input: CodCollectionInput; paymentId: string }
+      > = JSON.parse(localStorage.getItem(DEMO_COD_REQUESTS_KEY) || "{}");
+      const existing = requests[input.request_id];
+      if (existing) {
+        if (JSON.stringify(existing.input) !== JSON.stringify(input))
+          throw new Error("คำขอรับเงินซ้ำมีข้อมูลไม่ตรงกัน");
+        return { payment_id: existing.paymentId, submitted_prices: 0 };
+      }
+      const current = allDemoShipments().find(
+        (row) => row.id === input.shipment_id,
+      );
+      if (!current || current.payment_mode !== "CASH_DESTINATION")
+        throw new Error("ไม่พบบิลเงินสดปลายทาง");
+      if (current.discount !== input.expected_discount)
+        throw new Error("ส่วนลดของบิลเปลี่ยนแล้ว กรุณาโหลดข้อมูลใหม่");
+      if (
+        input.method_option_id &&
+        !readDemoCodMethods().some(
+          (option) =>
+            option.id === input.method_option_id &&
+            option.base_method === input.method,
+        )
+      )
+        throw new Error("วิธีรับเงินไม่ถูกต้อง");
+      if (!isCurrencyAmount(input.amount) || !isCurrencyAmount(input.discount))
+        throw new Error("ยอดรับเงินหรือส่วนลดไม่ถูกต้อง");
+      const adjusted = adjustedCodAmounts(current, input.discount);
+      if (
+        input.discount < 0 ||
+        input.amount <= 0 ||
+        input.amount > adjusted.outstanding ||
+        adjusted.total <= 0
+      )
+        throw new Error("ยอดรับเงินเกินยอดค้างหลังหักส่วนลด");
+      const seenItems = new Set<string>();
+      for (const line of input.items) {
+        if (
+          seenItems.has(line.item_id) ||
+          !current.items?.some((item) => item.id === line.item_id) ||
+          line.unit_price < 0 ||
+          !isCurrencyAmount(line.unit_price)
+        )
+          throw new Error("ราคาต่อหน่วยไม่ถูกต้อง");
+        seenItems.add(line.item_id);
+      }
+      const operations = loadOperations();
+      let submitted = 0;
+      for (const line of input.items) {
+        const item = current.items?.find((row) => row.id === line.item_id);
+        if (
+          !item ||
+          (!item.product_unit_id && !item.product_id) ||
+          (!item.price_pending && item.unit_price === line.unit_price)
+        )
+          continue;
+        const catalogId = item.product_unit_id || item.product_id;
+        const key = pairRateKey(
+          current.receiver_party_id || current.receiver_snapshot.id || "",
+          current.sender_party_id || current.sender_snapshot.id || "",
+          catalogId,
+          current.payment_mode,
+          current.destination_branch_code || "",
+        );
+        const pending = operations.priceRequests.find(
+          (row) =>
+            row.billNumber === current.shipment_no &&
+            (!row.shipmentItemId || row.shipmentItemId === item.id) &&
+            row.catalogId === catalogId &&
+            ["PENDING_PRICE", "PENDING_APPROVAL", "RETURNED"].includes(
+              row.status,
+            ),
+        );
+        if (
+          pending?.status === "PENDING_APPROVAL" &&
+          pending.proposedPrice !== line.unit_price
+        )
+          throw new Error("รายการสินค้านี้มีราคาเสนอรอบัญชีแล้ว");
+        const now = new Date().toISOString();
+        if (pending)
+          Object.assign(pending, {
+            proposedPrice: line.unit_price,
+            status: "PENDING_APPROVAL",
+            submittedAt: now,
+            submittedBy: "ผู้รับเงิน",
+            note: "ราคาแจ้งจากหน้าเก็บเงิน COD",
+          });
+        else
+          operations.priceRequests.push({
+            id: crypto.randomUUID(),
+            shipmentItemId: item.id,
+            key,
+            receiverId:
+              current.receiver_party_id || current.receiver_snapshot.id || "",
+            senderId:
+              current.sender_party_id || current.sender_snapshot.id || "",
+            catalogId,
+            payment: current.payment_mode,
+            branch: current.destination_branch_code || "",
+            billNumber: current.shipment_no,
+            quantity: item.quantity,
+            proposedPrice: line.unit_price,
+            approvedPrice: null,
+            actualCollectedAmount: null,
+            status: "PENDING_APPROVAL",
+            requestedAt: now,
+            submittedAt: now,
+            submittedBy: "ผู้รับเงิน",
+            note: "ราคาแจ้งจากหน้าเก็บเงิน COD",
+          });
+        submitted += 1;
+      }
+      const adjustments = readDemoCodAdjustments();
+      adjustments[input.shipment_id] = input.discount;
+      const paymentId = crypto.randomUUID();
+      requests[input.request_id] = { input, paymentId };
+      saveOperations(operations);
+      localStorage.setItem(
+        DEMO_COD_ADJUSTMENTS_KEY,
+        JSON.stringify(adjustments),
+      );
+      localStorage.setItem(DEMO_COD_REQUESTS_KEY, JSON.stringify(requests));
+      const payments = readDemoPayments();
+      payments.unshift({
+        shipmentId: input.shipment_id,
+        amount: input.amount,
+        receivedAt: new Date().toISOString(),
+      });
+      saveDemoPayments(payments);
+      return { payment_id: paymentId, submitted_prices: submitted };
     },
     codPayments: async (): Promise<CodPaymentRecord[]> =>
       demo ? readDemoPayments() : api.getCodPayments(),
