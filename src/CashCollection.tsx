@@ -1436,15 +1436,9 @@ export default function CashCollection() {
                       </td>
                       <td>
                         <strong>{row.receiver_snapshot.display_name}</strong>
-                        <small>
-                          {row.receiver_snapshot.phone || "ไม่มีเบอร์โทร"}
-                        </small>
                       </td>
                       <td>
                         <strong>{row.sender_snapshot.display_name}</strong>
-                        <small>
-                          {row.sender_snapshot.phone || "ไม่มีเบอร์โทร"}
-                        </small>
                       </td>
                       <td>
                         <div className="cod-table-items">
