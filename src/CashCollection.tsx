@@ -1194,20 +1194,20 @@ export default function CashCollection() {
                 }}
               />
             </label>
-            <label className="cod-include-unsent">
-              <input
-                type="checkbox"
-                checked={includeUnsent}
-                onChange={(event) => {
-                  setIncludeUnsent(event.target.checked);
-                  setPage(0);
-                }}
-              />
-              <span>
-                <strong>รวมบิลที่ยังไม่ส่งของ</strong>
-                <small>สำหรับรับเงินก่อนลูกค้ามารับสินค้า</small>
-              </span>
-            </label>
+            <div className="shipment-filter-control">
+              <span>สถานะการส่งของ</span>
+              <label className="cod-include-unsent">
+                <input
+                  type="checkbox"
+                  checked={includeUnsent}
+                  onChange={(event) => {
+                    setIncludeUnsent(event.target.checked);
+                    setPage(0);
+                  }}
+                />
+                <strong>แสดงบิลที่ยังไม่ส่ง</strong>
+              </label>
+            </div>
             <label className="shipment-filter-control">
               <span>ผู้รับ</span>
               <select
