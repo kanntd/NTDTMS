@@ -3,9 +3,10 @@ import {
   buildCodSummary,
   codCollectionStatus,
   compareBillNumbers,
+  isCodPendingPriceOnly,
   matchesCodDeliveryFilter,
   matchingBills,
-  outstandingCodBills,
+  pendingCodBills,
   withRecordedDeliveryDates,
 } from "./codCollection";
 import type { Shipment } from "./types";
@@ -57,6 +58,15 @@ describe("COD collection model", () => {
         shipment({ paid_amount: 1000, outstanding_amount: 0 }),
       ),
     ).toBe("COLLECTED");
+    expect(
+      codCollectionStatus(
+        shipment({
+          total_amount: 0,
+          outstanding_amount: 0,
+          price_pending: true,
+        }),
+      ),
+    ).toBe("AWAITING_PRICE");
   });
 
   it("summarizes outstanding, overdue and today's payments", () => {
@@ -101,14 +111,37 @@ describe("COD collection model", () => {
 
   it("uses recorded item delivery time for both partial and completed demo bills", () => {
     const rows = [
-      shipment({ id: "partial", shipment_status: "IN_TRANSIT", delivered_at: undefined }),
+      shipment({
+        id: "partial",
+        shipment_status: "IN_TRANSIT",
+        delivered_at: undefined,
+      }),
       shipment({ id: "demo-complete", delivered_at: undefined }),
-      shipment({ id: "not-sent", shipment_status: "IN_TRANSIT", delivered_at: undefined }),
+      shipment({
+        id: "not-sent",
+        shipment_status: "IN_TRANSIT",
+        delivered_at: undefined,
+      }),
     ];
     const dated = withRecordedDeliveryDates(rows, [
-      { shipmentId: "partial", itemId: "item-1", quantity: 1, deliveredAt: "2026-09-27T05:00:00.000Z" },
-      { shipmentId: "partial", itemId: "item-2", quantity: 1, deliveredAt: "2026-09-28T05:00:00.000Z" },
-      { shipmentId: "demo-complete", itemId: "item-3", quantity: 1, deliveredAt: "2026-09-28T06:00:00.000Z" },
+      {
+        shipmentId: "partial",
+        itemId: "item-1",
+        quantity: 1,
+        deliveredAt: "2026-09-27T05:00:00.000Z",
+      },
+      {
+        shipmentId: "partial",
+        itemId: "item-2",
+        quantity: 1,
+        deliveredAt: "2026-09-28T05:00:00.000Z",
+      },
+      {
+        shipmentId: "demo-complete",
+        itemId: "item-3",
+        quantity: 1,
+        deliveredAt: "2026-09-28T06:00:00.000Z",
+      },
     ]);
     expect(dated.map((row) => row.delivered_at)).toEqual([
       "2026-09-28T05:00:00.000Z",
@@ -149,12 +182,18 @@ describe("COD collection model", () => {
 
   it("filters delivered and undelivered bills, including partial deliveries", () => {
     const sent = shipment({ shipment_status: "IN_TRANSIT" });
-    const notSent = shipment({ delivered_at: undefined });
-    expect(matchesCodDeliveryFilter(sent, "SENT")).toBe(true);
-    expect(matchesCodDeliveryFilter(sent, "NOT_SENT")).toBe(false);
-    expect(matchesCodDeliveryFilter(notSent, "NOT_SENT")).toBe(true);
-    expect(matchesCodDeliveryFilter(notSent, "SENT")).toBe(false);
-    expect(matchesCodDeliveryFilter(sent, "", "2026-09-28")).toBe(false);
+    const notSent = shipment({
+      shipment_status: "IN_TRANSIT",
+      delivered_at: undefined,
+    });
+    expect(matchesCodDeliveryFilter(sent, false)).toBe(true);
+    expect(matchesCodDeliveryFilter(notSent, false)).toBe(false);
+    expect(matchesCodDeliveryFilter(notSent, true)).toBe(true);
+    expect(matchesCodDeliveryFilter(notSent, true, "2026-09-28")).toBe(true);
+    expect(matchesCodDeliveryFilter(sent, false, "2026-09-28")).toBe(false);
+    expect(
+      matchesCodDeliveryFilter(shipment({ delivered_at: undefined }), false),
+    ).toBe(true);
   });
 
   it("keeps old unpaid bills available while hiding fully collected bills", () => {
@@ -174,15 +213,40 @@ describe("COD collection model", () => {
       }),
       shipment({ id: "other-sequence", shipment_no: "B0126000118" }),
     ];
-    expect(outstandingCodBills(rows).map((row) => row.id)).toEqual([
+    expect(pendingCodBills(rows).map((row) => row.id)).toEqual([
       "old-unpaid",
       "other-sequence",
     ]);
     expect(
-      outstandingCodBills(matchingBills(rows, "18")).map((row) => row.id),
+      pendingCodBills(matchingBills(rows, "18")).map((row) => row.id),
     ).toEqual(["old-unpaid"]);
-    expect(outstandingCodBills(matchingBills(rows, "B0126000018"))).toEqual(
-      [],
-    );
+    expect(pendingCodBills(matchingBills(rows, "B0126000018"))).toEqual([]);
+  });
+
+  it("shows delivered zero-value COD bills waiting for prices but hides collected bills", () => {
+    const waiting = shipment({
+      id: "unpriced-delivered",
+      shipment_no: "B0126000421",
+      total_amount: 0,
+      outstanding_amount: 0,
+      paid_amount: 0,
+      price_pending: true,
+    });
+    const paid = shipment({
+      id: "paid",
+      outstanding_amount: 0,
+      paid_amount: 1000,
+      price_pending: false,
+    });
+    const partlyPaidWaiting = shipment({
+      id: "partly-paid-waiting",
+      outstanding_amount: 0,
+      paid_amount: 250,
+      price_pending: true,
+    });
+    expect(isCodPendingPriceOnly(waiting)).toBe(true);
+    expect(
+      pendingCodBills([waiting, paid, partlyPaidWaiting]).map((row) => row.id),
+    ).toEqual(["unpriced-delivered", "partly-paid-waiting"]);
   });
 });

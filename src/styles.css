@@ -4471,6 +4471,43 @@ table {
 .cod-filter-grid {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
+.cod-include-unsent {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.cod-include-unsent input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.cod-include-unsent span {
+  display: grid;
+  gap: 2px;
+  color: var(--green-dark);
+  font-size: 12px;
+}
+.cod-include-unsent small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.cod-price-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #d4e4d8;
+  border-radius: 5px;
+  background: #f4faf5;
+  color: #325c42;
+  font-size: 12px;
+}
 .cod-filter-grid .cod-sort-select select {
   width: 100%;
   min-width: 0;
@@ -4527,7 +4564,7 @@ table {
   font-weight: 600;
 }
 .cod-table {
-  min-width: 1250px;
+  min-width: 1550px;
 }
 .cod-table td {
   vertical-align: top;
@@ -4535,30 +4572,42 @@ table {
 .cod-table th:first-child {
   width: 165px;
 }
-.cod-table th:nth-child(2),
-.cod-table th:nth-child(4) {
-  width: 145px;
+.cod-table th:nth-child(2) {
+  width: 135px;
 }
-.cod-table th:nth-child(3) {
-  width: 220px;
+.cod-table th:nth-child(3),
+.cod-table th:nth-child(4) {
+  width: 175px;
 }
 .cod-table th:nth-child(5),
-.cod-table th:nth-child(6),
-.cod-table th:nth-child(7) {
-  width: 125px;
+.cod-table td:nth-child(5) {
+  min-width: 230px;
 }
+.cod-table th:nth-child(6),
+.cod-table th:nth-child(7),
 .cod-table th:nth-child(8) {
-  width: 135px;
+  width: 105px;
+}
+.cod-table th:nth-child(9) {
+  width: 125px;
 }
 .cod-table th:last-child {
   width: 126px;
+}
+.cod-table-items {
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+}
+.cod-table-items span {
+  white-space: normal;
 }
 .cod-table td small {
   display: block;
   margin-top: 3px;
   color: var(--muted);
 }
-.cod-table td:nth-child(6) small {
+.cod-table td:nth-child(7) small {
   color: #2d7893;
 }
 .cod-status {
@@ -4590,6 +4639,10 @@ table {
 .cod-status.pending {
   background: #fff0ed;
   color: #ad5545;
+}
+.cod-status.awaiting_price {
+  background: #fff4dd;
+  color: #956c18;
 }
 .cod-row-actions {
   display: flex;
