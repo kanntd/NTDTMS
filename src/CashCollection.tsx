@@ -49,7 +49,11 @@ import {
   SORT_ALL_LABEL,
   type ListSort,
 } from "./listSort";
-import { destinationBranches, isDestinationBranch } from "./branchRoutes";
+import {
+  destinationBranchAliases,
+  destinationBranches,
+  isDestinationBranch,
+} from "./branchRoutes";
 import Receipt from "./Receipt";
 import ShipmentEditModal from "./ShipmentEditModal";
 import type { DataService } from "./service";
@@ -90,11 +94,15 @@ function senderKey(row: Shipment) {
   );
 }
 
-async function loadCodShipments(service: DataService) {
+async function loadCodShipments(
+  service: DataService,
+  branchAliases?: string[],
+) {
   const rows: Shipment[] = [];
   for (let page = 0; page < 40; page += 1) {
     const result = await service.shipments({
       payment: "CASH_DESTINATION",
+      branchAliases,
       page,
       pageSize: LOAD_PAGE_SIZE,
     });
@@ -107,11 +115,22 @@ async function loadCodShipments(service: DataService) {
 
 export default function CashCollection() {
   const w = useWorkspace();
+  const canSelectBranch = ["owner", "admin", "accountant"].includes(
+    w.profile.role,
+  );
+  const profileBranchCode = w.branches.find(
+    (row) => row.id === w.profile.branch_id,
+  )?.code;
+  const profileDestinationCode =
+    destinationBranches(w.branches, w.zones).find(
+      (row) => row.code === profileBranchCode,
+    )?.code || "";
   const invoiceRef = useRef<HTMLInputElement>(null);
   const amountRef = useRef<HTMLInputElement>(null);
   const priceRef = useRef<HTMLInputElement>(null);
   const captureRef = useRef<HTMLElement>(null);
   const requestRef = useRef(crypto.randomUUID());
+  const branchInitialized = useRef(false);
   const loadedOnce = useRef(false);
   const [rows, setRows] = useState<Shipment[]>([]);
   const [payments, setPayments] = useState<CodPaymentRecord[]>([]);
@@ -144,7 +163,8 @@ export default function CashCollection() {
   const [sender, setSender] = useState("");
   const [catalogId, setCatalogId] = useState("");
   const [unit, setUnit] = useState("");
-  const [branch, setBranch] = useState("");
+  const [branch, setBranch] = useState(profileDestinationCode);
+  const effectiveBranch = canSelectBranch ? branch : profileDestinationCode;
   const [district, setDistrict] = useState("");
   const [priceState, setPriceState] = useState<"PENDING" | "PRICED" | "">("");
   const [vehicle, setVehicle] = useState("");
@@ -157,9 +177,24 @@ export default function CashCollection() {
 
   const reload = useCallback(async () => {
     setLoading(true);
+    if (!canSelectBranch && !profileDestinationCode) {
+      setRows([]);
+      setPayments([]);
+      setLoading(false);
+      return;
+    }
     try {
       const [nextRows, nextPayments] = await Promise.all([
-        loadCodShipments(w.service),
+        loadCodShipments(
+          w.service,
+          !canSelectBranch && profileDestinationCode
+            ? destinationBranchAliases(
+                profileDestinationCode,
+                w.branches,
+                w.zones,
+              )
+            : undefined,
+        ),
         w.service.codPayments(),
       ]);
       const undatedIds = nextRows
@@ -183,7 +218,14 @@ export default function CashCollection() {
     } finally {
       setLoading(false);
     }
-  }, [w.service]);
+  }, [canSelectBranch, profileDestinationCode, w.branches, w.service, w.zones]);
+
+  useEffect(() => {
+    if (!canSelectBranch || branchInitialized.current || !w.branches.length)
+      return;
+    branchInitialized.current = true;
+    setBranch(profileDestinationCode);
+  }, [canSelectBranch, profileDestinationCode, w.branches.length]);
 
   useEffect(() => {
     void reload();
@@ -238,12 +280,33 @@ export default function CashCollection() {
   const summary = useMemo(
     () =>
       buildCodSummary(
-        rows.filter((row) => matchesCodDeliveryFilter(row, includeUnsent)),
+        rows.filter(
+          (row) =>
+            matchesCodDeliveryFilter(row, includeUnsent) &&
+            isDestinationBranch(
+              row.destination_branch_code,
+              effectiveBranch,
+              w.branches,
+              w.zones,
+            ),
+        ),
         payments,
       ),
-    [rows, payments, includeUnsent],
+    [rows, payments, includeUnsent, effectiveBranch, w.branches, w.zones],
   );
   const openRows = useMemo(() => pendingCodBills(rows), [rows]);
+  const scopedRows = useMemo(
+    () =>
+      openRows.filter((row) =>
+        isDestinationBranch(
+          row.destination_branch_code,
+          effectiveBranch,
+          w.branches,
+          w.zones,
+        ),
+      ),
+    [effectiveBranch, openRows, w.branches, w.zones],
+  );
   const selectedUnavailable = Boolean(
     selected && !openRows.some((row) => row.id === selected.id),
   );
@@ -251,22 +314,13 @@ export default function CashCollection() {
     () =>
       [
         ...new Map(
-          openRows
-            .filter((row) =>
-              isDestinationBranch(
-                row.destination_branch_code,
-                branch,
-                w.branches,
-                w.zones,
-              ),
-            )
-            .map((row) => [
-              receiverKey(row),
-              row.receiver_snapshot.display_name,
-            ]),
+          scopedRows.map((row) => [
+            receiverKey(row),
+            row.receiver_snapshot.display_name,
+          ]),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [branch, openRows, w.branches, w.zones],
+    [scopedRows],
   );
   useEffect(() => {
     if (receiver && !receiverOptions.some(([id]) => id === receiver)) {
@@ -278,19 +332,19 @@ export default function CashCollection() {
     () =>
       [
         ...new Map(
-          openRows.map((row) => [
+          scopedRows.map((row) => [
             senderKey(row),
             row.sender_snapshot.display_name,
           ]),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [openRows],
+    [scopedRows],
   );
   const productOptions = useMemo(
     () =>
       [
         ...new Map(
-          openRows.flatMap((row) =>
+          scopedRows.flatMap((row) =>
             (row.items || []).map((item) => [
               item.product_id,
               `${item.description} / ${item.unit}`,
@@ -298,31 +352,33 @@ export default function CashCollection() {
           ),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [openRows],
+    [scopedRows],
   );
   const unitOptions = useMemo(
     () =>
       [
         ...new Set(
-          openRows.flatMap((row) => (row.items || []).map((item) => item.unit)),
+          scopedRows.flatMap((row) =>
+            (row.items || []).map((item) => item.unit),
+          ),
         ),
       ]
         .filter(Boolean)
         .sort((a, b) => a.localeCompare(b, "th")),
-    [openRows],
+    [scopedRows],
   );
   const districtOptions = useMemo(
     () =>
       [
         ...new Map(
-          openRows
+          scopedRows
             .map(
               (row) => [row.district_id, row.district_name] as [string, string],
             )
             .filter(([id]) => Boolean(id)),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [openRows],
+    [scopedRows],
   );
   const branchOptions = useMemo(
     () => destinationBranches(w.branches, w.zones),
@@ -330,10 +386,14 @@ export default function CashCollection() {
   );
   const vehicleOptions = useMemo(
     () =>
-      [...new Set(openRows.map((row) => row.vehicle_plate_no).filter(Boolean))]
+      [
+        ...new Set(
+          scopedRows.map((row) => row.vehicle_plate_no).filter(Boolean),
+        ),
+      ]
         .map(String)
         .sort((a, b) => a.localeCompare(b, "th", { numeric: true })),
-    [openRows],
+    [scopedRows],
   );
   const collectedToday = useMemo(() => {
     const today = localDate();
@@ -347,7 +407,7 @@ export default function CashCollection() {
   }, [payments]);
   const visible = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("th");
-    return openRows
+    return scopedRows
       .filter((row) =>
         matchesCodDeliveryFilter(row, includeUnsent, deliveryFrom, deliveryTo),
       )
@@ -378,14 +438,6 @@ export default function CashCollection() {
           row.items?.some((item) => item.product_id === catalogId),
       )
       .filter((row) => !unit || row.items?.some((item) => item.unit === unit))
-      .filter((row) =>
-        isDestinationBranch(
-          row.destination_branch_code,
-          branch,
-          w.branches,
-          w.zones,
-        ),
-      )
       .filter((row) => !district || row.district_id === district)
       .filter(
         (row) =>
@@ -423,7 +475,6 @@ export default function CashCollection() {
           ),
       );
   }, [
-    branch,
     catalogId,
     deliveryFrom,
     includeUnsent,
@@ -432,7 +483,7 @@ export default function CashCollection() {
     priceState,
     query,
     receiver,
-    openRows,
+    scopedRows,
     sender,
     sort,
     unit,
@@ -450,7 +501,7 @@ export default function CashCollection() {
     sender ||
     catalogId ||
     unit ||
-    branch ||
+    (canSelectBranch && branch !== profileDestinationCode) ||
     district ||
     priceState ||
     vehicle ||
@@ -504,7 +555,17 @@ export default function CashCollection() {
 
   function findBill() {
     setMatchingIds([]);
-    const allMatches = matchingBills(rows, invoice);
+    const allMatches = matchingBills(
+      rows.filter((row) =>
+        isDestinationBranch(
+          row.destination_branch_code,
+          effectiveBranch,
+          w.branches,
+          w.zones,
+        ),
+      ),
+      invoice,
+    );
     const matches = pendingCodBills(allMatches);
     if (!matches.length) {
       w.toast(
@@ -705,7 +766,7 @@ export default function CashCollection() {
     setSender("");
     setCatalogId("");
     setUnit("");
-    setBranch("");
+    if (canSelectBranch) setBranch(profileDestinationCode);
     setDistrict("");
     setPriceState("");
     setVehicle("");
@@ -1290,19 +1351,25 @@ export default function CashCollection() {
             <label className="shipment-filter-control">
               <span>สาขาปลายทาง</span>
               <select
-                value={branch}
+                value={effectiveBranch}
+                disabled={!canSelectBranch}
                 onChange={(event) => {
                   setBranch(event.target.value);
                   setReceiver("");
                   setPage(0);
                 }}
               >
-                <option value="">ทุกสาขา</option>
-                {branchOptions.map((row) => (
-                  <option key={row.code} value={row.code}>
-                    {row.name}
-                  </option>
-                ))}
+                {canSelectBranch && <option value="">ทุกสาขา</option>}
+                {branchOptions
+                  .filter(
+                    (row) =>
+                      canSelectBranch || row.code === profileDestinationCode,
+                  )
+                  .map((row) => (
+                    <option key={row.code} value={row.code}>
+                      {row.name}
+                    </option>
+                  ))}
               </select>
             </label>
             <label className="shipment-filter-control">

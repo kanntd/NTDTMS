@@ -82,7 +82,11 @@ export default function DeliveryWork() {
   const branches = manager
     ? allBranches
     : allBranches.filter((row) => row.code === profileBranch?.code);
-  const [branch, setBranch] = useState(branches[0]?.code || "");
+  const [branch, setBranch] = useState(
+    branches.find((row) => row.code === profileBranch?.code)?.code ||
+      branches[0]?.code ||
+      "",
+  );
   const [bills, setBills] = useState<Bill[]>([]);
   const [entry, setEntry] = useState("");
   const [search, setSearch] = useState("");
@@ -228,8 +232,12 @@ export default function DeliveryWork() {
 
   useEffect(() => {
     if (!branches.some((row) => row.code === branch))
-      setBranch(branches[0]?.code || "");
-  }, [branches, branch]);
+      setBranch(
+        branches.find((row) => row.code === profileBranch?.code)?.code ||
+          branches[0]?.code ||
+          "",
+      );
+  }, [branches, branch, profileBranch?.code]);
   useEffect(() => {
     setSelected(new Set());
     setAmounts({});
