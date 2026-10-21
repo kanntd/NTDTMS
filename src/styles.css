@@ -4469,7 +4469,39 @@ table {
   border-top: 0;
 }
 .cod-filter-grid {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.cod-include-unsent {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.cod-include-unsent input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.cod-include-unsent strong {
+  color: var(--green-dark);
+  font-size: 13px;
+  font-weight: 400;
+}
+.cod-price-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #d4e4d8;
+  border-radius: 5px;
+  background: #f4faf5;
+  color: #325c42;
+  font-size: 12px;
 }
 .cod-filter-grid .cod-sort-select select {
   width: 100%;
@@ -4527,38 +4559,52 @@ table {
   font-weight: 600;
 }
 .cod-table {
-  min-width: 1250px;
+  min-width: 1430px;
+  table-layout: fixed;
+}
+.cod-table th {
+  padding: 10px 12px;
 }
 .cod-table td {
+  padding: 11px 12px;
   vertical-align: top;
 }
 .cod-table th:first-child {
-  width: 165px;
+  width: 11%;
 }
-.cod-table th:nth-child(2),
+.cod-table th:nth-child(2) {
+  width: 9%;
+}
+.cod-table th:nth-child(3),
 .cod-table th:nth-child(4) {
-  width: 145px;
+  width: 15%;
 }
-.cod-table th:nth-child(3) {
-  width: 220px;
+.cod-table th:nth-child(5) {
+  width: 12%;
 }
-.cod-table th:nth-child(5),
 .cod-table th:nth-child(6),
 .cod-table th:nth-child(7) {
-  width: 125px;
+  width: 7%;
 }
-.cod-table th:nth-child(8) {
-  width: 135px;
-}
+.cod-table th:nth-child(8),
+.cod-table th:nth-child(9),
 .cod-table th:last-child {
-  width: 126px;
+  width: 8%;
+}
+.cod-table-items {
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+}
+.cod-table-items span {
+  white-space: normal;
 }
 .cod-table td small {
   display: block;
   margin-top: 3px;
   color: var(--muted);
 }
-.cod-table td:nth-child(6) small {
+.cod-table td:nth-child(7) small {
   color: #2d7893;
 }
 .cod-status {
@@ -4591,6 +4637,10 @@ table {
   background: #fff0ed;
   color: #ad5545;
 }
+.cod-status.awaiting_price {
+  background: #fff4dd;
+  color: #956c18;
+}
 .cod-row-actions {
   display: flex;
   align-items: center;
@@ -4598,6 +4648,11 @@ table {
 }
 .cod-row-actions .icon-button:first-child {
   color: var(--green);
+}
+@media (max-width: 1600px) {
+  .cod-filter-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 @media (max-width: 1200px) {
   .cod-summary {

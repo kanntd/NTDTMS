@@ -468,6 +468,15 @@ export async function collectCodPayment(data: CodCollectionInput) {
   const result = await supabase.rpc("collect_cod_payment", { data });
   return check(result) as { payment_id: string; submitted_prices: number };
 }
+export async function submitCodItemPrices(
+  shipmentId: string,
+  items: CodCollectionInput["items"],
+) {
+  const result = await supabase.rpc("submit_cod_item_prices", {
+    data: { shipment_id: shipmentId, items },
+  });
+  return check(result) as { submitted_prices: number };
+}
 export async function getCodPaymentMethods(): Promise<
   CodPaymentMethodOption[]
 > {

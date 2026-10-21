@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { demoBranches, demoZones, saveDemo } from "./demo";
+import { demoBranches, demoZones, loadDemo, saveDemo } from "./demo";
 import { loadOperations } from "./operationsStore";
 import { createService } from "./service";
 import type { ShipmentDetail } from "./types";
@@ -106,6 +106,32 @@ afterEach(() => {
 });
 
 describe("demo COD collection", () => {
+  it("submits a delivered zero-value bill's item price without recording a payment", async () => {
+    const state = loadDemo();
+    state.shipments[0].total_amount = 0;
+    state.shipments[0].outstanding_amount = 0;
+    state.shipments[0].price_pending = true;
+    saveDemo(state);
+    const service = createService(true);
+    const prices = [{ item_id: "line-2", unit_price: 40 }];
+    expect(await service.submitCodPrices("bill-1", prices)).toEqual({
+      submitted_prices: 1,
+    });
+    expect(await service.submitCodPrices("bill-1", prices)).toEqual({
+      submitted_prices: 0,
+    });
+    expect(await service.codPayments()).toHaveLength(0);
+    expect(loadOperations().priceRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          shipmentItemId: "line-2",
+          proposedPrice: 40,
+          status: "PENDING_APPROVAL",
+        }),
+      ]),
+    );
+  });
+
   it("saves a discount and payment once while sending changed line prices for approval", async () => {
     const service = createService(true);
     const optionId = await service.addCodPaymentMethod("พร้อมเพย์", "TRANSFER");

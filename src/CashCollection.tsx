@@ -19,11 +19,11 @@ import {
   buildCodSummary,
   codCollectionStatus,
   dateKey,
+  isCodPendingPriceOnly,
   matchesCodDeliveryFilter,
   matchingBills,
-  outstandingCodBills,
+  pendingCodBills,
   withRecordedDeliveryDates,
-  type CodDeliveryFilter,
   type CodCollectionStatus,
 } from "./codCollection";
 import { billEditAccessMessage, canEditShipment } from "./billEditPolicy";
@@ -49,7 +49,11 @@ import {
   SORT_ALL_LABEL,
   type ListSort,
 } from "./listSort";
-import { destinationBranches, isDestinationBranch } from "./branchRoutes";
+import {
+  destinationBranchAliases,
+  destinationBranches,
+  isDestinationBranch,
+} from "./branchRoutes";
 import Receipt from "./Receipt";
 import ShipmentEditModal from "./ShipmentEditModal";
 import type { DataService } from "./service";
@@ -71,6 +75,7 @@ const statusLabels: Record<CodCollectionStatus, string> = {
   PENDING: "รอเก็บเงิน",
   PARTIAL: "เก็บบางส่วน",
   COLLECTED: "เก็บครบแล้ว",
+  AWAITING_PRICE: "รอราคา",
 };
 
 function receiverKey(row: Shipment) {
@@ -89,11 +94,15 @@ function senderKey(row: Shipment) {
   );
 }
 
-async function loadCodShipments(service: DataService) {
+async function loadCodShipments(
+  service: DataService,
+  branchAliases?: string[],
+) {
   const rows: Shipment[] = [];
   for (let page = 0; page < 40; page += 1) {
     const result = await service.shipments({
       payment: "CASH_DESTINATION",
+      branchAliases,
       page,
       pageSize: LOAD_PAGE_SIZE,
     });
@@ -106,10 +115,22 @@ async function loadCodShipments(service: DataService) {
 
 export default function CashCollection() {
   const w = useWorkspace();
+  const canSelectBranch = ["owner", "admin", "accountant"].includes(
+    w.profile.role,
+  );
+  const profileBranchCode = w.branches.find(
+    (row) => row.id === w.profile.branch_id,
+  )?.code;
+  const profileDestinationCode =
+    destinationBranches(w.branches, w.zones).find(
+      (row) => row.code === profileBranchCode,
+    )?.code || "";
   const invoiceRef = useRef<HTMLInputElement>(null);
   const amountRef = useRef<HTMLInputElement>(null);
+  const priceRef = useRef<HTMLInputElement>(null);
   const captureRef = useRef<HTMLElement>(null);
   const requestRef = useRef(crypto.randomUUID());
+  const branchInitialized = useRef(false);
   const loadedOnce = useRef(false);
   const [rows, setRows] = useState<Shipment[]>([]);
   const [payments, setPayments] = useState<CodPaymentRecord[]>([]);
@@ -136,13 +157,14 @@ export default function CashCollection() {
   const [query, setQuery] = useState("");
   const [deliveryFrom, setDeliveryFrom] = useState("");
   const [deliveryTo, setDeliveryTo] = useState("");
-  const [deliveryState, setDeliveryState] = useState<CodDeliveryFilter>("");
+  const [includeUnsent, setIncludeUnsent] = useState(false);
   const [matchingIds, setMatchingIds] = useState<string[]>([]);
   const [receiver, setReceiver] = useState("");
   const [sender, setSender] = useState("");
   const [catalogId, setCatalogId] = useState("");
   const [unit, setUnit] = useState("");
-  const [branch, setBranch] = useState("");
+  const [branch, setBranch] = useState(profileDestinationCode);
+  const effectiveBranch = canSelectBranch ? branch : profileDestinationCode;
   const [district, setDistrict] = useState("");
   const [priceState, setPriceState] = useState<"PENDING" | "PRICED" | "">("");
   const [vehicle, setVehicle] = useState("");
@@ -155,9 +177,24 @@ export default function CashCollection() {
 
   const reload = useCallback(async () => {
     setLoading(true);
+    if (!canSelectBranch && !profileDestinationCode) {
+      setRows([]);
+      setPayments([]);
+      setLoading(false);
+      return;
+    }
     try {
       const [nextRows, nextPayments] = await Promise.all([
-        loadCodShipments(w.service),
+        loadCodShipments(
+          w.service,
+          !canSelectBranch && profileDestinationCode
+            ? destinationBranchAliases(
+                profileDestinationCode,
+                w.branches,
+                w.zones,
+              )
+            : undefined,
+        ),
         w.service.codPayments(),
       ]);
       const undatedIds = nextRows
@@ -171,9 +208,7 @@ export default function CashCollection() {
       setPayments(nextPayments);
       setSelected((current) =>
         current
-          ? datedRows.find(
-              (row) => row.id === current.id && row.outstanding_amount > 0,
-            ) || null
+          ? datedRows.find((row) => row.id === current.id) || current
           : null,
       );
       setFailure("");
@@ -183,7 +218,14 @@ export default function CashCollection() {
     } finally {
       setLoading(false);
     }
-  }, [w.service]);
+  }, [canSelectBranch, profileDestinationCode, w.branches, w.service, w.zones]);
+
+  useEffect(() => {
+    if (!canSelectBranch || branchInitialized.current || !w.branches.length)
+      return;
+    branchInitialized.current = true;
+    setBranch(profileDestinationCode);
+  }, [canSelectBranch, profileDestinationCode, w.branches.length]);
 
   useEffect(() => {
     void reload();
@@ -207,8 +249,11 @@ export default function CashCollection() {
   useEffect(() => {
     if (!selected) return;
     const frame = requestAnimationFrame(() => {
-      amountRef.current?.focus();
-      amountRef.current?.select();
+      const target = isCodPendingPriceOnly(selected)
+        ? priceRef.current
+        : amountRef.current;
+      target?.focus();
+      target?.select();
     });
     return () => cancelAnimationFrame(frame);
   }, [selected?.id]);
@@ -233,30 +278,49 @@ export default function CashCollection() {
   }, [w.demo, w.revision]);
 
   const summary = useMemo(
-    () => buildCodSummary(rows, payments),
-    [rows, payments],
+    () =>
+      buildCodSummary(
+        rows.filter(
+          (row) =>
+            matchesCodDeliveryFilter(row, includeUnsent) &&
+            isDestinationBranch(
+              row.destination_branch_code,
+              effectiveBranch,
+              w.branches,
+              w.zones,
+            ),
+        ),
+        payments,
+      ),
+    [rows, payments, includeUnsent, effectiveBranch, w.branches, w.zones],
   );
-  const openRows = useMemo(() => outstandingCodBills(rows), [rows]);
+  const openRows = useMemo(() => pendingCodBills(rows), [rows]);
+  const scopedRows = useMemo(
+    () =>
+      openRows.filter((row) =>
+        isDestinationBranch(
+          row.destination_branch_code,
+          effectiveBranch,
+          w.branches,
+          w.zones,
+        ),
+      ),
+    [effectiveBranch, openRows, w.branches, w.zones],
+  );
+  const selectedUnavailable = Boolean(
+    selected && !openRows.some((row) => row.id === selected.id),
+  );
   const receiverOptions = useMemo(
     () =>
       [
         ...new Map(
-          openRows
-            .filter((row) =>
-              isDestinationBranch(
-                row.destination_branch_code,
-                branch,
-                w.branches,
-                w.zones,
-              ),
-            )
-            .map((row) => [
-              receiverKey(row),
-              row.receiver_snapshot.display_name,
-            ]),
+          scopedRows.map((row) => [
+            receiverKey(row),
+            row.receiver_snapshot.display_name,
+          ]),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [branch, openRows, w.branches, w.zones],
+    [scopedRows],
   );
   useEffect(() => {
     if (receiver && !receiverOptions.some(([id]) => id === receiver)) {
@@ -268,19 +332,19 @@ export default function CashCollection() {
     () =>
       [
         ...new Map(
-          openRows.map((row) => [
+          scopedRows.map((row) => [
             senderKey(row),
             row.sender_snapshot.display_name,
           ]),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [openRows],
+    [scopedRows],
   );
   const productOptions = useMemo(
     () =>
       [
         ...new Map(
-          openRows.flatMap((row) =>
+          scopedRows.flatMap((row) =>
             (row.items || []).map((item) => [
               item.product_id,
               `${item.description} / ${item.unit}`,
@@ -288,31 +352,33 @@ export default function CashCollection() {
           ),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [openRows],
+    [scopedRows],
   );
   const unitOptions = useMemo(
     () =>
       [
         ...new Set(
-          openRows.flatMap((row) => (row.items || []).map((item) => item.unit)),
+          scopedRows.flatMap((row) =>
+            (row.items || []).map((item) => item.unit),
+          ),
         ),
       ]
         .filter(Boolean)
         .sort((a, b) => a.localeCompare(b, "th")),
-    [openRows],
+    [scopedRows],
   );
   const districtOptions = useMemo(
     () =>
       [
         ...new Map(
-          openRows
+          scopedRows
             .map(
               (row) => [row.district_id, row.district_name] as [string, string],
             )
             .filter(([id]) => Boolean(id)),
         ),
       ].sort((a, b) => a[1].localeCompare(b[1], "th")),
-    [openRows],
+    [scopedRows],
   );
   const branchOptions = useMemo(
     () => destinationBranches(w.branches, w.zones),
@@ -320,10 +386,14 @@ export default function CashCollection() {
   );
   const vehicleOptions = useMemo(
     () =>
-      [...new Set(openRows.map((row) => row.vehicle_plate_no).filter(Boolean))]
+      [
+        ...new Set(
+          scopedRows.map((row) => row.vehicle_plate_no).filter(Boolean),
+        ),
+      ]
         .map(String)
         .sort((a, b) => a.localeCompare(b, "th", { numeric: true })),
-    [openRows],
+    [scopedRows],
   );
   const collectedToday = useMemo(() => {
     const today = localDate();
@@ -337,9 +407,9 @@ export default function CashCollection() {
   }, [payments]);
   const visible = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("th");
-    return openRows
+    return scopedRows
       .filter((row) =>
-        matchesCodDeliveryFilter(row, deliveryState, deliveryFrom, deliveryTo),
+        matchesCodDeliveryFilter(row, includeUnsent, deliveryFrom, deliveryTo),
       )
       .filter(
         (row) =>
@@ -368,14 +438,6 @@ export default function CashCollection() {
           row.items?.some((item) => item.product_id === catalogId),
       )
       .filter((row) => !unit || row.items?.some((item) => item.unit === unit))
-      .filter((row) =>
-        isDestinationBranch(
-          row.destination_branch_code,
-          branch,
-          w.branches,
-          w.zones,
-        ),
-      )
       .filter((row) => !district || row.district_id === district)
       .filter(
         (row) =>
@@ -413,16 +475,15 @@ export default function CashCollection() {
           ),
       );
   }, [
-    branch,
     catalogId,
     deliveryFrom,
-    deliveryState,
+    includeUnsent,
     deliveryTo,
     district,
     priceState,
     query,
     receiver,
-    openRows,
+    scopedRows,
     sender,
     sort,
     unit,
@@ -434,13 +495,13 @@ export default function CashCollection() {
   const hasFilters = Boolean(
     query ||
     deliveryFrom ||
-    deliveryState ||
+    includeUnsent ||
     deliveryTo ||
     receiver ||
     sender ||
     catalogId ||
     unit ||
-    branch ||
+    (canSelectBranch && branch !== profileDestinationCode) ||
     district ||
     priceState ||
     vehicle ||
@@ -466,7 +527,7 @@ export default function CashCollection() {
 
   function chooseBill(row: Shipment) {
     setMatchingIds([]);
-    if (row.outstanding_amount <= 0) {
+    if (!pendingCodBills([row]).length) {
       w.toast(`บิล ${row.shipment_no} เก็บเงินครบแล้ว`, true);
       setInvoice("");
       invoiceRef.current?.focus();
@@ -494,12 +555,22 @@ export default function CashCollection() {
 
   function findBill() {
     setMatchingIds([]);
-    const allMatches = matchingBills(rows, invoice);
-    const matches = outstandingCodBills(allMatches);
+    const allMatches = matchingBills(
+      rows.filter((row) =>
+        isDestinationBranch(
+          row.destination_branch_code,
+          effectiveBranch,
+          w.branches,
+          w.zones,
+        ),
+      ),
+      invoice,
+    );
+    const matches = pendingCodBills(allMatches);
     if (!matches.length) {
       w.toast(
         allMatches.length
-          ? `บิล ${invoice.trim()} เก็บเงินครบแล้ว`
+          ? `บิล ${invoice.trim()} เก็บเงินครบแล้วหรือไม่มีราคาให้เรียกเก็บ`
           : `ไม่พบบิล ${invoice.trim() || "ที่ระบุ"} ในรายการ COD`,
         true,
       );
@@ -549,8 +620,44 @@ export default function CashCollection() {
     }
   }
 
+  async function submitPrices() {
+    if (
+      !selected ||
+      selectedUnavailable ||
+      saving ||
+      !isCodPendingPriceOnly(selected)
+    )
+      return;
+    let prices;
+    try {
+      prices = knownCodPrices(selected.items || [], itemPrices).lines;
+    } catch (cause) {
+      w.toast((cause as Error).message, true);
+      return;
+    }
+    if (!prices.length) {
+      w.toast("กรุณาระบุราคาต่อหน่วยอย่างน้อยหนึ่งรายการ", true);
+      priceRef.current?.focus();
+      return;
+    }
+    setSaving(true);
+    try {
+      const result = await w.service.submitCodPrices(selected.id, prices);
+      w.toast(
+        result.submitted_prices
+          ? `ส่งราคา ${result.submitted_prices} รายการให้บัญชียืนยันแล้ว`
+          : "ราคานี้อยู่ระหว่างบัญชียืนยันแล้ว",
+      );
+      clearSelection();
+    } catch (cause) {
+      w.toast((cause as Error).message || "ส่งราคาไม่สำเร็จ", true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveCollection() {
-    if (!selected || saving) return;
+    if (!selected || selectedUnavailable || saving) return;
     const value = Number(amount);
     const newDiscount = Number(discount || 0);
     if (!isCurrencyAmount(newDiscount) || newDiscount < 0) {
@@ -654,12 +761,12 @@ export default function CashCollection() {
     setQuery("");
     setDeliveryFrom("");
     setDeliveryTo("");
-    setDeliveryState("");
+    setIncludeUnsent(false);
     setReceiver("");
     setSender("");
     setCatalogId("");
     setUnit("");
-    setBranch("");
+    if (canSelectBranch) setBranch(profileDestinationCode);
     setDistrict("");
     setPriceState("");
     setVehicle("");
@@ -761,7 +868,9 @@ export default function CashCollection() {
                 เลือกบิล
               </Button>
             </div>
-            <small>กด Enter เพื่อไปที่ช่องยอดรับเงินจริง</small>
+            <small>
+              กด Enter เพื่อไปที่ยอดรับเงินจริง หรือราคาสินค้าหากบิลยังรอราคา
+            </small>
           </form>
 
           {matchingIds.length > 1 ? (
@@ -784,7 +893,9 @@ export default function CashCollection() {
                           <span>{row.receiver_snapshot.display_name}</span>
                           <span>{row.zone_name}</span>
                           <strong>
-                            ค้าง ฿ {money(row.outstanding_amount)}
+                            {isCodPendingPriceOnly(row)
+                              ? "รอราคา"
+                              : `ค้าง ฿ ${money(row.outstanding_amount)}`}
                           </strong>
                         </button>,
                       ]
@@ -797,7 +908,8 @@ export default function CashCollection() {
               className="cod-payment-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                void saveCollection();
+                if (isCodPendingPriceOnly(selected)) void submitPrices();
+                else void saveCollection();
               }}
             >
               <div className="cod-selected-heading">
@@ -809,6 +921,12 @@ export default function CashCollection() {
                   เปลี่ยนบิล
                 </button>
               </div>
+              {selectedUnavailable && (
+                <div className="cod-price-notice" role="status">
+                  บิลนี้มีการเปลี่ยนแปลงและไม่อยู่ในรายการค้างเก็บแล้ว
+                  ข้อมูลที่กรอกยังอยู่ กรุณาเลือกบิลใหม่ก่อนบันทึก
+                </div>
+              )}
               <div className="cod-selected-totals">
                 <span>
                   ยอดบิล{" "}
@@ -844,7 +962,7 @@ export default function CashCollection() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(selected.items || []).map((item) => {
+                    {(selected.items || []).map((item, index) => {
                       const raw = itemPrices[item.id] || "";
                       const price = Number(raw);
                       return (
@@ -855,6 +973,14 @@ export default function CashCollection() {
                           <td>{number(item.quantity)}</td>
                           <td>
                             <input
+                              ref={
+                                index ===
+                                selected.items?.findIndex(
+                                  (row) => row.price_pending,
+                                )
+                                  ? priceRef
+                                  : undefined
+                              }
                               aria-label={`ราคาต่อหน่วย ${item.description}`}
                               type="number"
                               inputMode="decimal"
@@ -886,150 +1012,191 @@ export default function CashCollection() {
                   </tbody>
                 </table>
               </div>
-              <label className="cod-discount-field">
-                <span>ส่วนลดทั้งบิล (บาท)</span>
-                <input
-                  aria-label="ส่วนลดทั้งบิล"
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                  value={discount}
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    setDiscount(next);
-                    if (!amountTouched && Number.isFinite(Number(next))) {
-                      const adjusted = adjustedCodAmounts(
-                        selected,
-                        Number(next || 0),
-                      );
-                      setAmount(Math.max(0, adjusted.outstanding).toFixed(2));
-                    }
-                  }}
-                />
-              </label>
+              {!isCodPendingPriceOnly(selected) && (
+                <label className="cod-discount-field">
+                  <span>ส่วนลดทั้งบิล (บาท)</span>
+                  <input
+                    aria-label="ส่วนลดทั้งบิล"
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="0.01"
+                    value={discount}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setDiscount(next);
+                      if (!amountTouched && Number.isFinite(Number(next))) {
+                        const adjusted = adjustedCodAmounts(
+                          selected,
+                          Number(next || 0),
+                        );
+                        setAmount(Math.max(0, adjusted.outstanding).toFixed(2));
+                      }
+                    }}
+                  />
+                </label>
+              )}
               <div className="cod-items-summary">
                 <span>
-                  รวมรายการที่ทราบ <b>฿ {money(knownItemTotal)}</b>
+                  {isCodPendingPriceOnly(selected)
+                    ? "รวมราคาเสนอที่ระบุ"
+                    : "รวมรายการที่ทราบ"}{" "}
+                  <b>฿ {money(knownItemTotal)}</b>
                 </span>
-                <span>
-                  ส่วนลด{" "}
-                  <b>
-                    ฿{" "}
-                    {money(Number.isFinite(discountValue) ? discountValue : 0)}
-                  </b>
-                </span>
-                <span>
-                  {remainingItemValue >= 0
-                    ? "ส่วนต่างที่ยังไม่ระบุ"
-                    : "ราคาที่กรอกเกินยอดสินค้า"}
-                  <b>฿ {money(Math.abs(remainingItemValue))}</b>
-                </span>
+                {!isCodPendingPriceOnly(selected) && (
+                  <>
+                    <span>
+                      ส่วนลด{" "}
+                      <b>
+                        ฿{" "}
+                        {money(
+                          Number.isFinite(discountValue) ? discountValue : 0,
+                        )}
+                      </b>
+                    </span>
+                    <span>
+                      {remainingItemValue >= 0
+                        ? "ส่วนต่างที่ยังไม่ระบุ"
+                        : "ราคาที่กรอกเกินยอดสินค้า"}
+                      <b>฿ {money(Math.abs(remainingItemValue))}</b>
+                    </span>
+                  </>
+                )}
               </div>
               <small className="cod-items-hint">
                 ราคารวมคำนวณจากจำนวน × ราคาต่อหน่วย ราคาใหม่ส่งให้บัญชียืนยัน
               </small>
-              <div className="cod-payment-fields">
-                <label className="cod-amount-field">
-                  <span>ยอดรับเงินจริง (บาท)</span>
-                  <div>
-                    <b>฿</b>
-                    <input
-                      ref={amountRef}
-                      aria-label="ยอดรับเงินจริง"
-                      type="number"
-                      inputMode="decimal"
-                      min="0.01"
-                      max={Math.max(
-                        0,
-                        adjustedSelected?.outstanding ??
-                          selected.outstanding_amount,
-                      )}
-                      step="0.01"
-                      value={amount}
-                      onChange={(event) => {
-                        setAmount(event.target.value);
-                        setAmountTouched(true);
-                      }}
-                      required
-                    />
-                  </div>
-                </label>
-                <label>
-                  <span>วิธีรับเงิน</span>
-                  <select
-                    value={method}
-                    onChange={(event) => {
-                      if (event.target.value === "ADD") setAddingMethod(true);
-                      else {
-                        setMethod(event.target.value);
-                        setAddingMethod(false);
-                      }
-                    }}
-                  >
-                    <option value="CASH">เงินสด</option>
-                    <option value="TRANSFER">โอน</option>
-                    <option value="QR">QR Payment</option>
-                    {methodOptions.map((option) => (
-                      <option key={option.id} value={`CUSTOM:${option.id}`}>
-                        {option.label}
-                      </option>
-                    ))}
-                    <option value="ADD">+ เพิ่มวิธีรับเงิน</option>
-                  </select>
-                </label>
-                <label>
-                  <span>หมายเหตุ</span>
-                  <input
-                    placeholder="พิมพ์หมายเหตุ (ไม่บังคับ)"
-                    maxLength={500}
-                    value={note}
-                    onChange={(event) => setNote(event.target.value)}
-                  />
-                </label>
-                <Button className="primary" type="submit" busy={saving}>
-                  <HandCoins size={18} />
-                  บันทึกรับเงิน
-                </Button>
-              </div>
-              {addingMethod && (
-                <div className="cod-add-method">
-                  <label>
-                    ชื่อวิธีรับเงิน
-                    <input
-                      autoFocus
-                      maxLength={80}
-                      value={newMethodName}
-                      onChange={(event) => setNewMethodName(event.target.value)}
-                      placeholder="พิมพ์ชื่อวิธีรับเงิน"
-                    />
-                  </label>
-                  <label>
-                    ประเภท
-                    <select
-                      value={newMethodCategory}
-                      onChange={(event) =>
-                        setNewMethodCategory(
-                          event.target.value as CodPaymentMethod,
-                        )
-                      }
-                    >
-                      <option value="CASH">เงินสด</option>
-                      <option value="TRANSFER">โอน</option>
-                      <option value="QR">QR Payment</option>
-                    </select>
-                  </label>
+              {isCodPendingPriceOnly(selected) ? (
+                <div className="cod-price-notice">
+                  <span>
+                    บิลนี้ยังไม่มีราคาที่ยืนยัน จึงยังรับเงินในระบบไม่ได้
+                    ระบุราคาที่ทราบแล้วส่งให้บัญชียืนยันก่อน
+                  </span>
                   <Button
-                    type="button"
-                    onClick={() => void addMethod()}
-                    busy={savingMethod}
+                    className="primary"
+                    type="submit"
+                    busy={saving}
+                    disabled={selectedUnavailable}
                   >
-                    เพิ่มรายการ
+                    ส่งราคาให้บัญชียืนยัน
                   </Button>
-                  <button type="button" onClick={() => setAddingMethod(false)}>
-                    ยกเลิก
-                  </button>
                 </div>
+              ) : (
+                <>
+                  <div className="cod-payment-fields">
+                    <label className="cod-amount-field">
+                      <span>ยอดรับเงินจริง (บาท)</span>
+                      <div>
+                        <b>฿</b>
+                        <input
+                          ref={amountRef}
+                          aria-label="ยอดรับเงินจริง"
+                          type="number"
+                          inputMode="decimal"
+                          min="0.01"
+                          max={Math.max(
+                            0,
+                            adjustedSelected?.outstanding ??
+                              selected.outstanding_amount,
+                          )}
+                          step="0.01"
+                          value={amount}
+                          onChange={(event) => {
+                            setAmount(event.target.value);
+                            setAmountTouched(true);
+                          }}
+                          required
+                        />
+                      </div>
+                    </label>
+                    <label>
+                      <span>วิธีรับเงิน</span>
+                      <select
+                        value={method}
+                        onChange={(event) => {
+                          if (event.target.value === "ADD")
+                            setAddingMethod(true);
+                          else {
+                            setMethod(event.target.value);
+                            setAddingMethod(false);
+                          }
+                        }}
+                      >
+                        <option value="CASH">เงินสด</option>
+                        <option value="TRANSFER">โอน</option>
+                        <option value="QR">QR Payment</option>
+                        {methodOptions.map((option) => (
+                          <option key={option.id} value={`CUSTOM:${option.id}`}>
+                            {option.label}
+                          </option>
+                        ))}
+                        <option value="ADD">+ เพิ่มวิธีรับเงิน</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>หมายเหตุ</span>
+                      <input
+                        placeholder="พิมพ์หมายเหตุ (ไม่บังคับ)"
+                        maxLength={500}
+                        value={note}
+                        onChange={(event) => setNote(event.target.value)}
+                      />
+                    </label>
+                    <Button
+                      className="primary"
+                      type="submit"
+                      busy={saving}
+                      disabled={selectedUnavailable}
+                    >
+                      <HandCoins size={18} />
+                      บันทึกรับเงิน
+                    </Button>
+                  </div>
+                  {addingMethod && (
+                    <div className="cod-add-method">
+                      <label>
+                        ชื่อวิธีรับเงิน
+                        <input
+                          autoFocus
+                          maxLength={80}
+                          value={newMethodName}
+                          onChange={(event) =>
+                            setNewMethodName(event.target.value)
+                          }
+                          placeholder="พิมพ์ชื่อวิธีรับเงิน"
+                        />
+                      </label>
+                      <label>
+                        ประเภท
+                        <select
+                          value={newMethodCategory}
+                          onChange={(event) =>
+                            setNewMethodCategory(
+                              event.target.value as CodPaymentMethod,
+                            )
+                          }
+                        >
+                          <option value="CASH">เงินสด</option>
+                          <option value="TRANSFER">โอน</option>
+                          <option value="QR">QR Payment</option>
+                        </select>
+                      </label>
+                      <Button
+                        type="button"
+                        onClick={() => void addMethod()}
+                        busy={savingMethod}
+                      >
+                        เพิ่มรายการ
+                      </Button>
+                      <button
+                        type="button"
+                        onClick={() => setAddingMethod(false)}
+                      >
+                        ยกเลิก
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </form>
           ) : (
@@ -1069,7 +1236,6 @@ export default function CashCollection() {
             <label className="shipment-filter-control">
               <span>ส่งของตั้งแต่วันที่</span>
               <DateInput
-                disabled={deliveryState === "NOT_SENT"}
                 max={deliveryTo || undefined}
                 value={deliveryFrom}
                 onChange={(value) => {
@@ -1081,7 +1247,6 @@ export default function CashCollection() {
             <label className="shipment-filter-control">
               <span>ถึงวันที่</span>
               <DateInput
-                disabled={deliveryState === "NOT_SENT"}
                 min={deliveryFrom || undefined}
                 value={deliveryTo}
                 onChange={(value) => {
@@ -1090,25 +1255,20 @@ export default function CashCollection() {
                 }}
               />
             </label>
-            <label className="shipment-filter-control">
+            <div className="shipment-filter-control">
               <span>สถานะการส่งของ</span>
-              <select
-                value={deliveryState}
-                onChange={(event) => {
-                  const next = event.target.value as CodDeliveryFilter;
-                  setDeliveryState(next);
-                  if (next === "NOT_SENT") {
-                    setDeliveryFrom("");
-                    setDeliveryTo("");
-                  }
-                  setPage(0);
-                }}
-              >
-                <option value="">แสดงทั้งหมด</option>
-                <option value="SENT">ส่งของแล้ว</option>
-                <option value="NOT_SENT">ยังไม่ส่งของ</option>
-              </select>
-            </label>
+              <label className="cod-include-unsent">
+                <input
+                  type="checkbox"
+                  checked={includeUnsent}
+                  onChange={(event) => {
+                    setIncludeUnsent(event.target.checked);
+                    setPage(0);
+                  }}
+                />
+                <strong>แสดงบิลที่ยังไม่ส่ง</strong>
+              </label>
+            </div>
             <label className="shipment-filter-control">
               <span>ผู้รับ</span>
               <select
@@ -1191,19 +1351,25 @@ export default function CashCollection() {
             <label className="shipment-filter-control">
               <span>สาขาปลายทาง</span>
               <select
-                value={branch}
+                value={effectiveBranch}
+                disabled={!canSelectBranch}
                 onChange={(event) => {
                   setBranch(event.target.value);
                   setReceiver("");
                   setPage(0);
                 }}
               >
-                <option value="">ทุกสาขา</option>
-                {branchOptions.map((row) => (
-                  <option key={row.code} value={row.code}>
-                    {row.name}
-                  </option>
-                ))}
+                {canSelectBranch && <option value="">ทุกสาขา</option>}
+                {branchOptions
+                  .filter(
+                    (row) =>
+                      canSelectBranch || row.code === profileDestinationCode,
+                  )
+                  .map((row) => (
+                    <option key={row.code} value={row.code}>
+                      {row.name}
+                    </option>
+                  ))}
               </select>
             </label>
             <label className="shipment-filter-control">
@@ -1304,8 +1470,9 @@ export default function CashCollection() {
                 <tr>
                   <th>เลขที่บิล / วันที่เปิด</th>
                   <th>วันที่ส่งของ</th>
-                  <th>ผู้รับสินค้า</th>
-                  <th>ทะเบียนรถต้นทาง</th>
+                  <th>ผู้รับ</th>
+                  <th>ผู้ส่ง</th>
+                  <th>รายการสินค้า</th>
                   <th className="numeric">ยอดบิล</th>
                   <th className="numeric">รับแล้ว</th>
                   <th className="numeric">ค้างเก็บ</th>
@@ -1336,14 +1503,22 @@ export default function CashCollection() {
                       </td>
                       <td>
                         <strong>{row.receiver_snapshot.display_name}</strong>
-                        <small>
-                          {row.receiver_snapshot.phone || "ไม่มีเบอร์โทร"}
-                        </small>
                       </td>
                       <td>
-                        {row.vehicle_plate_no || (
-                          <span className="muted">ยังไม่ระบุ</span>
-                        )}
+                        <strong>{row.sender_snapshot.display_name}</strong>
+                      </td>
+                      <td>
+                        <div className="cod-table-items">
+                          {(row.items || []).map((item) => (
+                            <span key={item.id}>
+                              {item.description} {number(item.quantity)}{" "}
+                              {item.unit}
+                            </span>
+                          ))}
+                          {!row.items?.length && (
+                            <span className="muted">ไม่พบรายการสินค้า</span>
+                          )}
+                        </div>
                       </td>
                       <td className="numeric">{money(row.total_amount)}</td>
                       <td className="numeric">
@@ -1365,9 +1540,10 @@ export default function CashCollection() {
                       </td>
                       <td>
                         <div className="cod-row-actions">
-                          {row.outstanding_amount > 0 && (
+                          {(row.outstanding_amount > 0 ||
+                            isCodPendingPriceOnly(row)) && (
                             <IconButton
-                              label={`รับเงินบิล ${row.shipment_no}`}
+                              label={`${isCodPendingPriceOnly(row) ? "เสนอราคาบิล" : "รับเงินบิล"} ${row.shipment_no}`}
                               onClick={() => {
                                 chooseBill(row);
                                 captureRef.current?.scrollIntoView({

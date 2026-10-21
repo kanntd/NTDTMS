@@ -16,6 +16,7 @@ import {
   adjustedCodAmounts,
   isCurrencyAmount,
   type CodCollectionInput,
+  type CodItemPrice,
   type CodPaymentMethod,
   type CodPaymentMethodOption,
 } from "./codPricing";
@@ -456,6 +457,88 @@ export function createService(demo: boolean) {
         ]),
       );
       return id;
+    },
+    submitCodPrices: async (shipmentId: string, items: CodItemPrice[]) => {
+      if (!demo) return api.submitCodItemPrices(shipmentId, items);
+      const shipment = allDemoShipments().find((row) => row.id === shipmentId);
+      if (
+        !shipment ||
+        shipment.payment_mode !== "CASH_DESTINATION" ||
+        !shipment.price_pending
+      )
+        throw new Error("ไม่พบบิล COD ที่รอราคา");
+      if (!items.length) throw new Error("กรุณาระบุราคาสินค้า");
+      const operations = loadOperations();
+      const seen = new Set<string>();
+      let submitted = 0;
+      for (const line of items) {
+        const item = shipment.items?.find((row) => row.id === line.item_id);
+        if (
+          !item ||
+          seen.has(line.item_id) ||
+          !isCurrencyAmount(line.unit_price) ||
+          line.unit_price < 0 ||
+          !item.product_unit_id
+        )
+          throw new Error("ราคาต่อหน่วยหรือรายการสินค้าไม่ถูกต้อง");
+        seen.add(line.item_id);
+        if (!item.price_pending && item.unit_price === line.unit_price)
+          continue;
+        const pending = operations.priceRequests.find(
+          (row) =>
+            row.billNumber === shipment.shipment_no &&
+            row.catalogId === item.product_unit_id &&
+            (!row.shipmentItemId || row.shipmentItemId === item.id) &&
+            ["PENDING_PRICE", "PENDING_APPROVAL", "RETURNED"].includes(
+              row.status,
+            ),
+        );
+        if (pending?.status === "PENDING_APPROVAL") {
+          if (pending.proposedPrice !== line.unit_price)
+            throw new Error("รายการสินค้านี้มีราคาเสนอรอบัญชีแล้ว");
+          continue;
+        }
+        const now = new Date().toISOString();
+        if (pending)
+          Object.assign(pending, {
+            shipmentItemId: item.id,
+            proposedPrice: line.unit_price,
+            status: "PENDING_APPROVAL",
+            submittedAt: now,
+            note: "ราคาแจ้งจากหน้าเก็บเงิน COD",
+          });
+        else
+          operations.priceRequests.push({
+            id: crypto.randomUUID(),
+            shipmentItemId: item.id,
+            key: pairRateKey(
+              shipment.receiver_party_id || shipment.receiver_snapshot.id || "",
+              shipment.sender_party_id || shipment.sender_snapshot.id || "",
+              item.product_unit_id,
+              shipment.payment_mode,
+              shipment.destination_branch_code || "",
+            ),
+            receiverId:
+              shipment.receiver_party_id || shipment.receiver_snapshot.id || "",
+            senderId:
+              shipment.sender_party_id || shipment.sender_snapshot.id || "",
+            catalogId: item.product_unit_id,
+            payment: shipment.payment_mode,
+            branch: shipment.destination_branch_code || "",
+            billNumber: shipment.shipment_no,
+            quantity: item.quantity,
+            proposedPrice: line.unit_price,
+            approvedPrice: null,
+            actualCollectedAmount: null,
+            status: "PENDING_APPROVAL",
+            requestedAt: now,
+            submittedAt: now,
+            note: "ราคาแจ้งจากหน้าเก็บเงิน COD",
+          });
+        submitted += 1;
+      }
+      if (submitted) saveOperations(operations);
+      return { submitted_prices: submitted };
     },
     collectCod: async (input: CodCollectionInput) => {
       if (!demo) return api.collectCodPayment(input);
