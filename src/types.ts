@@ -151,6 +151,7 @@ export interface Shipment {
   total_weight: number;
   paid_amount: number;
   outstanding_amount: number;
+  invoice_total?: number;
   shipment_status: "RECEIVED" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED";
   note: string;
   dropoff_name: string;
@@ -255,6 +256,21 @@ export interface CodPaymentRecord {
   shipmentId: string;
   amount: number;
   receivedAt: string;
+}
+export interface CodClosureRecord {
+  id: string;
+  shipmentId: string;
+  shipmentNo: string;
+  destinationBranchCode: string;
+  receiverName: string;
+  approvedTotal: number;
+  receivedTotal: number;
+  variance: number;
+  addedDiscount: number;
+  addedSurcharge: number;
+  reason: string;
+  closedByName: string;
+  closedAt: string;
 }
 export interface DeliveryInput {
   shipmentId: string;

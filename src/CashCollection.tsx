@@ -31,6 +31,7 @@ import { compareBillsByOpenedAt } from "./billNumber";
 import { useWorkspace } from "./context";
 import {
   adjustedCodAmounts,
+  codCloseDifference,
   codLineTotal,
   isCurrencyAmount,
   knownCodPrices,
@@ -58,7 +59,12 @@ import {
 import Receipt from "./Receipt";
 import ShipmentEditModal from "./ShipmentEditModal";
 import type { DataService } from "./service";
-import type { CodPaymentRecord, Shipment, ShipmentDetail } from "./types";
+import type {
+  CodClosureRecord,
+  CodPaymentRecord,
+  Shipment,
+  ShipmentDetail,
+} from "./types";
 import { localDate, money, number, thaiDate } from "./domain";
 import {
   Button,
@@ -186,6 +192,53 @@ export default function CashCollection() {
   const [editDetail, setEditDetail] = useState<ShipmentDetail | null>(null);
   const [registry, setRegistry] = useState(loadIntakeRegistry);
   const [operations, setOperations] = useState(loadOperations);
+  const [reportKind, setReportKind] = useState<"ALL" | "OVER" | "SHORT">("ALL");
+  const [reportPage, setReportPage] = useState(0);
+  const [reportRevision, setReportRevision] = useState(0);
+  const [report, setReport] = useState<{
+    rows: CodClosureRecord[];
+    count: number;
+  }>({ rows: [], count: 0 });
+  const [reportError, setReportError] = useState("");
+
+  useEffect(() => {
+    if (!canSelectBranch && !profileDestinationCode) return;
+    let active = true;
+    const branchAliases = effectiveBranch
+      ? destinationBranchAliases(effectiveBranch, w.branches, w.zones)
+      : undefined;
+    void w.service
+      .codClosures({
+        kind: reportKind,
+        branchAliases,
+        page: reportPage,
+        pageSize: PAGE_SIZE,
+      })
+      .then((result) => {
+        if (active) {
+          setReport(result);
+          setReportError("");
+        }
+      })
+      .catch((cause) => {
+        if (active)
+          setReportError((cause as Error).message || "โหลดรายงานไม่สำเร็จ");
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    canSelectBranch,
+    profileDestinationCode,
+    effectiveBranch,
+    reportKind,
+    reportPage,
+    reportRevision,
+    w.revision,
+    w.service,
+    w.branches,
+    w.zones,
+  ]);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -533,16 +586,14 @@ export default function CashCollection() {
     : 0;
   const remainingItemValue =
     Math.round((originalItemSubtotal - knownItemTotal) * 100) / 100;
+  const enteredCash = Number(amount);
+  const closePreview =
+    selected && isCurrencyAmount(enteredCash) && enteredCash >= 0
+      ? codCloseDifference(selected, enteredCash)
+      : null;
 
   function chooseBill(row: Shipment) {
     setMatchingIds([]);
-    if (codCollectionStatus(row) === "OVERPAID") {
-      w.toast(
-        `บิล ${row.shipment_no} มีเงินรับเกิน กรุณาให้บัญชีตรวจสอบ`,
-        true,
-      );
-      return;
-    }
     if (!pendingCodBills([row]).length) {
       w.toast(`บิล ${row.shipment_no} เก็บเงินครบแล้ว`, true);
       setInvoice("");
@@ -552,7 +603,11 @@ export default function CashCollection() {
     setSelected(row);
     setInvoice(row.shipment_no);
     setAmount(
-      isCodPendingPriceOnly(row) ? "" : row.outstanding_amount.toFixed(2),
+      isCodPendingPriceOnly(row)
+        ? ""
+        : row.outstanding_amount > 0
+          ? row.outstanding_amount.toFixed(2)
+          : "0.00",
     );
     setAmountTouched(false);
     setDiscount(Number(row.discount || 0).toFixed(2));
@@ -764,6 +819,99 @@ export default function CashCollection() {
       w.toast((cause as Error).message || "บันทึกรับเงินไม่สำเร็จ", true);
       amountRef.current?.focus();
       amountRef.current?.select();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function closeAtActual() {
+    if (!selected || selectedUnavailable || saving || selected.price_pending)
+      return;
+    const value = Number(amount);
+    const newDiscount = Number(discount || 0);
+    if (
+      !isCurrencyAmount(value) ||
+      value < 0 ||
+      newDiscount !== expectedDiscount
+    ) {
+      w.toast(
+        "กรุณาระบุยอดรับจริงให้ถูกต้อง และบันทึกส่วนลดที่แก้ไขก่อนปิดบิล",
+        true,
+      );
+      return;
+    }
+    const { approvedTotal, receivedTotal, variance } = codCloseDifference(
+      selected,
+      value,
+    );
+    if (receivedTotal <= 0 || variance === 0) {
+      w.toast("ปุ่มนี้ใช้เมื่อยอดรับจริงทั้งบิลต่างจากยอดที่ยืนยันแล้ว", true);
+      return;
+    }
+    const changedItemPrice = (selected.items || []).some(
+      (item) =>
+        itemPrices[item.id]?.trim() &&
+        Number(itemPrices[item.id]) !== item.unit_price,
+    );
+    if (changedItemPrice) {
+      w.toast(
+        "ราคาต่อหน่วยที่แก้ยังไม่บันทึก กรุณาส่งให้บัญชียืนยันก่อนปิดบิล",
+        true,
+      );
+      return;
+    }
+    const customMethod = method.startsWith("CUSTOM:")
+      ? methodOptions.find((option) => option.id === method.slice(7))
+      : null;
+    if (value > 0 && method.startsWith("CUSTOM:") && !customMethod) {
+      w.toast("กรุณาเลือกวิธีรับเงินอีกครั้ง", true);
+      return;
+    }
+    setSaving(true);
+    try {
+      await w.service.closeCod({
+        shipment_id: selected.id,
+        request_id: requestRef.current,
+        amount: value,
+        method: customMethod?.base_method || (method as CodPaymentMethod),
+        method_option_id: customMethod?.id || null,
+        note: note.trim(),
+        expected_total: selected.total_amount,
+        expected_paid: selected.paid_amount,
+        expected_discount: expectedDiscount,
+      });
+      setRows((current) =>
+        current.map((row) =>
+          row.id === selected.id
+            ? {
+                ...row,
+                total_amount:
+                  Math.round((row.total_amount + variance) * 100) / 100,
+                invoice_total: receivedTotal,
+                discount: row.discount + Math.max(0, -variance),
+                extra_charge: row.extra_charge + Math.max(0, variance),
+                paid_amount: receivedTotal,
+                outstanding_amount: 0,
+              }
+            : row,
+        ),
+      );
+      if (value > 0)
+        setPayments((current) => [
+          {
+            shipmentId: selected.id,
+            amount: value,
+            receivedAt: new Date().toISOString(),
+          },
+          ...current,
+        ]);
+      setReportRevision((current) => current + 1);
+      w.toast(
+        `ปิดบิล ${selected.shipment_no} ตามยอดรับจริง ฿ ${money(receivedTotal)} (ราคายืนยัน ฿ ${money(approvedTotal)})`,
+      );
+      clearSelection();
+    } catch (cause) {
+      w.toast((cause as Error).message || "ปิดบิลไม่สำเร็จ", true);
     } finally {
       setSaving(false);
     }
@@ -1104,16 +1252,7 @@ export default function CashCollection() {
                         aria-label="ยอดรับเงินจริง"
                         type="number"
                         inputMode="decimal"
-                        min="0.01"
-                        max={
-                          selected.price_pending
-                            ? undefined
-                            : Math.max(
-                                0,
-                                adjustedSelected?.outstanding ??
-                                  selected.outstanding_amount,
-                              )
-                        }
+                        min="0"
                         step="0.01"
                         value={amount}
                         onChange={(event) => {
@@ -1166,6 +1305,45 @@ export default function CashCollection() {
                     บันทึกรับเงิน
                   </Button>
                 </div>
+                {!selected.price_pending && (
+                  <div className="cod-close-panel">
+                    <span>
+                      ราคาที่ยืนยัน ฿{" "}
+                      {money(selected.invoice_total ?? selected.total_amount)} ·
+                      รับจริงทั้งบิล{" "}
+                      {closePreview
+                        ? `฿ ${money(closePreview.receivedTotal)}`
+                        : "—"}
+                      {closePreview && closePreview.variance !== 0 && (
+                        <strong>
+                          {" "}
+                          ·{" "}
+                          {closePreview.variance < 0
+                            ? "เงินขาด / ส่วนลดเฉพาะบิล"
+                            : "เงินเกิน / เพิ่มเฉพาะบิล"}{" "}
+                          ฿ {money(Math.abs(closePreview.variance))}
+                        </strong>
+                      )}
+                    </span>
+                    <Button
+                      type="button"
+                      onClick={() => void closeAtActual()}
+                      busy={saving}
+                      disabled={
+                        selectedUnavailable ||
+                        !closePreview ||
+                        closePreview.variance === 0 ||
+                        closePreview.receivedTotal <= 0
+                      }
+                    >
+                      ปิดบิลตามยอดรับจริง
+                    </Button>
+                    <small>
+                      ใช้เมื่อยอดรับนี้เป็นยอดสุดท้าย บิลจะไม่ค้างเก็บต่อ
+                      ราคาต่อหน่วยไม่เปลี่ยน หมายเหตุไม่บังคับ
+                    </small>
+                  </div>
+                )}
                 {addingMethod && (
                   <div className="cod-add-method">
                     <label>
@@ -1587,14 +1765,19 @@ export default function CashCollection() {
                         </span>
                         {paymentStatus === "OVERPAID" && (
                           <small className="cod-credit-amount">
-                            ฿ {money(row.paid_amount - row.total_amount)}
+                            ฿{" "}
+                            {money(
+                              row.paid_amount -
+                                (row.invoice_total ?? row.total_amount),
+                            )}
                           </small>
                         )}
                       </td>
                       <td>
                         <div className="cod-row-actions">
                           {(row.outstanding_amount > 0 ||
-                            isCodPendingPriceOnly(row)) && (
+                            isCodPendingPriceOnly(row) ||
+                            paymentStatus === "OVERPAID") && (
                             <IconButton
                               label={`${isCodPendingPriceOnly(row) ? "เสนอราคาบิล" : "รับเงินบิล"} ${row.shipment_no}`}
                               onClick={() => {
@@ -1647,6 +1830,81 @@ export default function CashCollection() {
           page={page}
           pageSize={PAGE_SIZE}
           onChange={setPage}
+        />
+      </section>
+
+      <section
+        className="cod-variance-report"
+        aria-label="รายงานเงินเกินและเงินขาด"
+      >
+        <header>
+          <div>
+            <h2>รายงานเงินเกิน / เงินขาด</h2>
+            <p>บิลที่ปิดตามยอดรับจริง ราคาต่อหน่วยที่ยืนยันยังคงเดิม</p>
+          </div>
+          <label>
+            แสดง
+            <select
+              value={reportKind}
+              onChange={(event) => {
+                setReportKind(event.target.value as "ALL" | "OVER" | "SHORT");
+                setReportPage(0);
+              }}
+            >
+              <option value="ALL">ทั้งหมด</option>
+              <option value="OVER">เงินเกิน</option>
+              <option value="SHORT">เงินขาด</option>
+            </select>
+          </label>
+        </header>
+        {reportError ? (
+          <div className="alert error" role="alert">
+            {reportError}
+          </div>
+        ) : report.rows.length ? (
+          <div className="data-table-scroll">
+            <table className="data-table cod-variance-table">
+              <thead>
+                <tr>
+                  <th>วันที่ปิด</th>
+                  <th>เลขที่บิล</th>
+                  <th>ผู้รับ</th>
+                  <th className="numeric">ราคายืนยัน</th>
+                  <th className="numeric">รับจริง</th>
+                  <th className="numeric">ส่วนต่าง</th>
+                  <th>ประเภท</th>
+                  <th>หมายเหตุ</th>
+                  <th>ผู้ปิดบิล</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>{thaiDate(row.closedAt)}</td>
+                    <td>{row.shipmentNo}</td>
+                    <td>{row.receiverName}</td>
+                    <td className="numeric">{money(row.approvedTotal)}</td>
+                    <td className="numeric">{money(row.receivedTotal)}</td>
+                    <td className="numeric">
+                      {row.variance > 0 ? "+" : "−"}
+                      {money(Math.abs(row.variance))}
+                    </td>
+                    <td>{row.variance > 0 ? "เงินเกิน" : "เงินขาด"}</td>
+                    <td>{row.reason || "—"}</td>
+                    <td>{row.closedByName}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <Empty title="ยังไม่มีบิลที่ปิดตามยอดรับจริง" />
+        )}
+        <Pagination
+          count={report.count}
+          page={reportPage}
+          pageSize={PAGE_SIZE}
+          onChange={setReportPage}
         />
       </section>
 

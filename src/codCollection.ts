@@ -43,7 +43,8 @@ export function pendingCodBills(shipments: Shipment[]) {
       row.shipment_status !== "CANCELLED" &&
       (row.outstanding_amount > 0 ||
         isCodPendingPriceOnly(row) ||
-        (!row.price_pending && row.paid_amount > row.total_amount)),
+        (!row.price_pending &&
+          row.paid_amount > (row.invoice_total ?? row.total_amount))),
   );
 }
 
@@ -70,11 +71,16 @@ export function withRecordedDeliveryDates(
 export function codCollectionStatus(
   shipment: Pick<
     Shipment,
-    "paid_amount" | "outstanding_amount" | "price_pending" | "total_amount"
+    | "paid_amount"
+    | "outstanding_amount"
+    | "price_pending"
+    | "total_amount"
+    | "invoice_total"
   >,
 ): CodCollectionStatus {
   if (isCodPendingPriceOnly(shipment)) return "AWAITING_PRICE";
-  if (shipment.paid_amount > shipment.total_amount) return "OVERPAID";
+  if (shipment.paid_amount > (shipment.invoice_total ?? shipment.total_amount))
+    return "OVERPAID";
   if (shipment.outstanding_amount <= 0) return "COLLECTED";
   return shipment.paid_amount > 0 ? "PARTIAL" : "PENDING";
 }

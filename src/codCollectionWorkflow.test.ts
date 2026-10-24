@@ -106,6 +106,100 @@ afterEach(() => {
 });
 
 describe("demo COD collection", () => {
+  it.each([
+    {
+      amount: 100,
+      variance: -150,
+      discount: 150,
+      extra: 0,
+      kind: "SHORT" as const,
+    },
+    {
+      amount: 280,
+      variance: 30,
+      discount: 0,
+      extra: 30,
+      kind: "OVER" as const,
+    },
+  ])(
+    "closes a priced bill at actual cash $amount without changing unit prices",
+    async ({ amount, variance, discount, extra, kind }) => {
+      const service = createService(true);
+      const before = (await service.detail("bill-1")).items.map(
+        (item) => item.unit_price,
+      );
+      const input = {
+        shipment_id: "bill-1",
+        request_id: crypto.randomUUID(),
+        amount,
+        method: "CASH" as const,
+        method_option_id: null,
+        note: "",
+        expected_total: 250,
+        expected_paid: 0,
+        expected_discount: 0,
+      };
+      const first = await service.closeCod(input);
+      expect(first.variance).toBe(variance);
+      expect((await service.closeCod(input)).closure_id).toBe(first.closure_id);
+      const bill = (
+        await service.shipments({ payment: "CASH_DESTINATION" })
+      ).rows.find((row) => row.id === "bill-1")!;
+      expect(bill.items?.map((item) => item.unit_price)).toEqual(before);
+      expect(bill.total_amount).toBe(amount);
+      expect(bill.paid_amount).toBe(amount);
+      expect(bill.outstanding_amount).toBe(0);
+      expect(bill.discount).toBe(discount);
+      expect(bill.extra_charge).toBe(extra);
+      expect(
+        (await service.codClosures({ kind, page: 0, pageSize: 30 })).rows,
+      ).toMatchObject([{ shipmentNo: "B0126000001", variance }]);
+      expect(await service.codPayments()).toHaveLength(1);
+      await expect(
+        service.closeCod({ ...input, request_id: crypto.randomUUID() }),
+      ).rejects.toThrow("ปิดตามยอดรับจริงแล้ว");
+    },
+  );
+
+  it("keeps unpriced bills open and closes an overpaid approved bill without another payment", async () => {
+    const state = loadDemo();
+    state.shipments[0].price_pending = true;
+    state.shipments[0].total_amount = 0;
+    state.shipments[0].outstanding_amount = 0;
+    saveDemo(state);
+    const service = createService(true);
+    const input = {
+      shipment_id: "bill-1",
+      request_id: crypto.randomUUID(),
+      amount: 0,
+      method: "CASH" as const,
+      method_option_id: null,
+      note: "",
+      expected_total: 0,
+      expected_paid: 0,
+      expected_discount: 0,
+    };
+    await expect(service.closeCod(input)).rejects.toThrow(
+      "ยังไม่มีราคาที่ยืนยัน",
+    );
+    const priced = loadDemo();
+    priced.shipments[0].price_pending = false;
+    priced.shipments[0].total_amount = 120;
+    priced.shipments[0].outstanding_amount = 0;
+    priced.shipments[0].paid_amount = 140;
+    saveDemo(priced);
+    const result = await service.closeCod({
+      ...input,
+      expected_total: 120,
+      expected_paid: 140,
+    });
+    expect(result.variance).toBe(20);
+    expect(result.payment_id).toBeNull();
+    expect(
+      (await service.codClosures({ kind: "OVER", page: 0, pageSize: 30 }))
+        .count,
+    ).toBe(1);
+  });
   it("records real cash on an unpriced zero-value bill as an advance", async () => {
     const state = loadDemo();
     state.shipments[0].total_amount = 0;

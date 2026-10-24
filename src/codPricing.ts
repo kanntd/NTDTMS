@@ -27,6 +27,28 @@ export interface CodCollectionInput {
   items: CodItemPrice[];
 }
 
+export interface CodCloseInput {
+  shipment_id: string;
+  request_id: string;
+  amount: number;
+  method: CodPaymentMethod;
+  method_option_id: string | null;
+  note: string;
+  expected_total: number;
+  expected_paid: number;
+  expected_discount: number;
+}
+
+export function codCloseDifference(shipment: Shipment, newPayment: number) {
+  const approvedTotal = cents(shipment.invoice_total ?? shipment.total_amount);
+  const receivedTotal = cents(shipment.paid_amount).plus(newPayment);
+  return {
+    approvedTotal: approvedTotal.toNumber(),
+    receivedTotal: receivedTotal.toNumber(),
+    variance: receivedTotal.minus(approvedTotal).toNumber(),
+  };
+}
+
 const cents = (value: Decimal.Value) => new Decimal(value).toDecimalPlaces(2);
 
 export function isCurrencyAmount(value: number) {
