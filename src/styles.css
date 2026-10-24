@@ -4345,42 +4345,6 @@ table {
   flex-basis: 100%;
   color: var(--muted);
 }
-.cod-variance-report {
-  margin-top: 14px;
-  padding: 16px;
-  background: white;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-}
-.cod-variance-report header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 12px;
-}
-.cod-variance-report h2 {
-  margin: 0;
-  font-size: 17px;
-}
-.cod-variance-report p {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-.cod-variance-report label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  white-space: nowrap;
-  font-size: 13px;
-}
-.cod-variance-report select {
-  min-width: 120px;
-}
-.cod-variance-table {
-  min-width: 850px;
-}
 .cod-items-heading {
   display: flex;
   align-items: baseline;

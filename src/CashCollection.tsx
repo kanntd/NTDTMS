@@ -59,12 +59,7 @@ import {
 import Receipt from "./Receipt";
 import ShipmentEditModal from "./ShipmentEditModal";
 import type { DataService } from "./service";
-import type {
-  CodClosureRecord,
-  CodPaymentRecord,
-  Shipment,
-  ShipmentDetail,
-} from "./types";
+import type { CodPaymentRecord, Shipment, ShipmentDetail } from "./types";
 import { localDate, money, number, thaiDate } from "./domain";
 import {
   Button,
@@ -192,54 +187,6 @@ export default function CashCollection() {
   const [editDetail, setEditDetail] = useState<ShipmentDetail | null>(null);
   const [registry, setRegistry] = useState(loadIntakeRegistry);
   const [operations, setOperations] = useState(loadOperations);
-  const [reportKind, setReportKind] = useState<"ALL" | "OVER" | "SHORT">("ALL");
-  const [reportPage, setReportPage] = useState(0);
-  const [reportRevision, setReportRevision] = useState(0);
-  const [report, setReport] = useState<{
-    rows: CodClosureRecord[];
-    count: number;
-  }>({ rows: [], count: 0 });
-  const [reportError, setReportError] = useState("");
-
-  useEffect(() => {
-    if (!canSelectBranch && !profileDestinationCode) return;
-    let active = true;
-    const branchAliases = effectiveBranch
-      ? destinationBranchAliases(effectiveBranch, w.branches, w.zones)
-      : undefined;
-    void w.service
-      .codClosures({
-        kind: reportKind,
-        branchAliases,
-        page: reportPage,
-        pageSize: PAGE_SIZE,
-      })
-      .then((result) => {
-        if (active) {
-          setReport(result);
-          setReportError("");
-        }
-      })
-      .catch((cause) => {
-        if (active)
-          setReportError((cause as Error).message || "โหลดรายงานไม่สำเร็จ");
-      });
-    return () => {
-      active = false;
-    };
-  }, [
-    canSelectBranch,
-    profileDestinationCode,
-    effectiveBranch,
-    reportKind,
-    reportPage,
-    reportRevision,
-    w.revision,
-    w.service,
-    w.branches,
-    w.zones,
-  ]);
-
   const reload = useCallback(async () => {
     setLoading(true);
     if (!canSelectBranch && !profileDestinationCode) {
@@ -905,7 +852,6 @@ export default function CashCollection() {
           },
           ...current,
         ]);
-      setReportRevision((current) => current + 1);
       w.toast(
         `ปิดบิล ${selected.shipment_no} ตามยอดรับจริง ฿ ${money(receivedTotal)} (ราคายืนยัน ฿ ${money(approvedTotal)})`,
       );
@@ -1830,81 +1776,6 @@ export default function CashCollection() {
           page={page}
           pageSize={PAGE_SIZE}
           onChange={setPage}
-        />
-      </section>
-
-      <section
-        className="cod-variance-report"
-        aria-label="รายงานเงินเกินและเงินขาด"
-      >
-        <header>
-          <div>
-            <h2>รายงานเงินเกิน / เงินขาด</h2>
-            <p>บิลที่ปิดตามยอดรับจริง ราคาต่อหน่วยที่ยืนยันยังคงเดิม</p>
-          </div>
-          <label>
-            แสดง
-            <select
-              value={reportKind}
-              onChange={(event) => {
-                setReportKind(event.target.value as "ALL" | "OVER" | "SHORT");
-                setReportPage(0);
-              }}
-            >
-              <option value="ALL">ทั้งหมด</option>
-              <option value="OVER">เงินเกิน</option>
-              <option value="SHORT">เงินขาด</option>
-            </select>
-          </label>
-        </header>
-        {reportError ? (
-          <div className="alert error" role="alert">
-            {reportError}
-          </div>
-        ) : report.rows.length ? (
-          <div className="data-table-scroll">
-            <table className="data-table cod-variance-table">
-              <thead>
-                <tr>
-                  <th>วันที่ปิด</th>
-                  <th>เลขที่บิล</th>
-                  <th>ผู้รับ</th>
-                  <th className="numeric">ราคายืนยัน</th>
-                  <th className="numeric">รับจริง</th>
-                  <th className="numeric">ส่วนต่าง</th>
-                  <th>ประเภท</th>
-                  <th>หมายเหตุ</th>
-                  <th>ผู้ปิดบิล</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.rows.map((row) => (
-                  <tr key={row.id}>
-                    <td>{thaiDate(row.closedAt)}</td>
-                    <td>{row.shipmentNo}</td>
-                    <td>{row.receiverName}</td>
-                    <td className="numeric">{money(row.approvedTotal)}</td>
-                    <td className="numeric">{money(row.receivedTotal)}</td>
-                    <td className="numeric">
-                      {row.variance > 0 ? "+" : "−"}
-                      {money(Math.abs(row.variance))}
-                    </td>
-                    <td>{row.variance > 0 ? "เงินเกิน" : "เงินขาด"}</td>
-                    <td>{row.reason || "—"}</td>
-                    <td>{row.closedByName}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty title="ยังไม่มีบิลที่ปิดตามยอดรับจริง" />
-        )}
-        <Pagination
-          count={report.count}
-          page={reportPage}
-          pageSize={PAGE_SIZE}
-          onChange={setReportPage}
         />
       </section>
 
