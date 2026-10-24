@@ -106,6 +106,98 @@ afterEach(() => {
 });
 
 describe("demo COD collection", () => {
+  it("records real cash on an unpriced zero-value bill as an advance", async () => {
+    const state = loadDemo();
+    state.shipments[0].total_amount = 0;
+    state.shipments[0].outstanding_amount = 0;
+    state.shipments[0].price_pending = true;
+    saveDemo(state);
+    const service = createService(true);
+    const input = {
+      shipment_id: "bill-1",
+      request_id: crypto.randomUUID(),
+      advance: true,
+      amount: 80,
+      method: "CASH" as const,
+      method_option_id: null,
+      note: "รับเงินก่อนยืนยันราคา",
+      discount: 0,
+      expected_discount: 0,
+      items: [{ item_id: "line-2", unit_price: 40 }],
+    };
+    const result = await service.collectCod(input);
+    expect(result.submitted_prices).toBe(1);
+    expect((await service.collectCod(input)).payment_id).toBe(
+      result.payment_id,
+    );
+    expect(await service.codPayments()).toMatchObject([
+      { shipmentId: "bill-1", amount: 80 },
+    ]);
+    expect(
+      (await service.shipments({ payment: "CASH_DESTINATION" })).rows[0],
+    ).toMatchObject({
+      total_amount: 0,
+      paid_amount: 80,
+      outstanding_amount: 0,
+    });
+    expect(loadOperations().priceRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          shipmentItemId: "line-2",
+          proposedPrice: 40,
+          status: "PENDING_APPROVAL",
+        }),
+      ]),
+    );
+  });
+
+  it("accepts cash while every item price is still blank", async () => {
+    const state = loadDemo();
+    state.shipments[0].total_amount = 0;
+    state.shipments[0].outstanding_amount = 0;
+    state.shipments[0].price_pending = true;
+    saveDemo(state);
+    const service = createService(true);
+    expect(
+      (
+        await service.collectCod({
+          shipment_id: "bill-1",
+          request_id: crypto.randomUUID(),
+          advance: true,
+          amount: 250,
+          method: "CASH",
+          method_option_id: null,
+          note: "ยังไม่ทราบราคา",
+          discount: 0,
+          expected_discount: 0,
+          items: [],
+        })
+      ).submitted_prices,
+    ).toBe(0);
+    expect(await service.codPayments()).toMatchObject([
+      { shipmentId: "bill-1", amount: 250 },
+    ]);
+    expect(loadOperations().priceRequests).toHaveLength(0);
+  });
+
+  it("rejects advances on bills without pending prices", async () => {
+    const service = createService(true);
+    await expect(
+      service.collectCod({
+        shipment_id: "bill-1",
+        request_id: crypto.randomUUID(),
+        advance: true,
+        amount: 300,
+        method: "CASH",
+        method_option_id: null,
+        note: "",
+        discount: 0,
+        expected_discount: 0,
+        items: [],
+      }),
+    ).rejects.toThrow();
+  });
+
   it("submits a delivered zero-value bill's item price without recording a payment", async () => {
     const state = loadDemo();
     state.shipments[0].total_amount = 0;

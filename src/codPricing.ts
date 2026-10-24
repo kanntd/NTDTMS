@@ -17,6 +17,7 @@ export interface CodItemPrice {
 export interface CodCollectionInput {
   shipment_id: string;
   request_id: string;
+  advance?: boolean;
   amount: number;
   method: CodPaymentMethod;
   method_option_id: string | null;

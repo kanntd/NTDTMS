@@ -574,8 +574,9 @@ export function createService(demo: boolean) {
       if (
         input.discount < 0 ||
         input.amount <= 0 ||
-        input.amount > adjusted.outstanding ||
-        adjusted.total <= 0
+        (input.advance
+          ? !current.price_pending || input.discount !== current.discount
+          : input.amount > adjusted.outstanding || adjusted.total <= 0)
       )
         throw new Error("ยอดรับเงินเกินยอดค้างหลังหักส่วนลด");
       const seenItems = new Set<string>();
