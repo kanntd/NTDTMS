@@ -4177,8 +4177,8 @@ table {
 .cod-scan-form {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  padding: 22px 24px 22px 0;
+  justify-content: flex-start;
+  padding: 48px 24px 22px 0;
   border-right: 1px solid var(--line);
 }
 .cod-scan-form > label,
@@ -4270,7 +4270,7 @@ table {
 }
 .cod-payment-form {
   display: grid;
-  align-content: center;
+  align-content: start;
   gap: 14px;
   padding: 20px 0 20px 24px;
 }
@@ -4325,6 +4325,25 @@ table {
 }
 .cod-selected-totals strong {
   color: #a34b3d;
+}
+.cod-close-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  padding: 11px 13px;
+  border: 1px solid #c7ddd0;
+  border-radius: 5px;
+  background: #f3faf5;
+  color: var(--green-dark);
+  font-size: 13px;
+}
+.cod-close-panel > span {
+  flex: 1 1 360px;
+}
+.cod-close-panel > small {
+  flex-basis: 100%;
+  color: var(--muted);
 }
 .cod-items-heading {
   display: flex;
@@ -4641,6 +4660,16 @@ table {
   background: #fff4dd;
   color: #956c18;
 }
+.cod-status.overpaid {
+  background: #fff0ed;
+  color: #ad5545;
+}
+.cod-credit-amount {
+  display: block;
+  margin-top: 3px;
+  color: #ad5545;
+  font-size: 11px;
+}
 .cod-row-actions {
   display: flex;
   align-items: center;
@@ -4662,7 +4691,7 @@ table {
     grid-template-columns: 1fr;
   }
   .cod-scan-form {
-    padding-right: 0;
+    padding: 22px 0;
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }

@@ -2,7 +2,7 @@ import { localDate } from "./domain";
 import type { CodPaymentRecord, DeliveryLineRecord, Shipment } from "./types";
 
 export type CodCollectionStatus =
-  "PENDING" | "PARTIAL" | "COLLECTED" | "AWAITING_PRICE";
+  "PENDING" | "PARTIAL" | "COLLECTED" | "AWAITING_PRICE" | "OVERPAID";
 
 export type CodSummary = {
   outstanding: { count: number; amount: number };
@@ -41,7 +41,10 @@ export function pendingCodBills(shipments: Shipment[]) {
     (row) =>
       row.payment_mode === "CASH_DESTINATION" &&
       row.shipment_status !== "CANCELLED" &&
-      (row.outstanding_amount > 0 || isCodPendingPriceOnly(row)),
+      (row.outstanding_amount > 0 ||
+        isCodPendingPriceOnly(row) ||
+        (!row.price_pending &&
+          row.paid_amount > (row.invoice_total ?? row.total_amount))),
   );
 }
 
@@ -68,10 +71,16 @@ export function withRecordedDeliveryDates(
 export function codCollectionStatus(
   shipment: Pick<
     Shipment,
-    "paid_amount" | "outstanding_amount" | "price_pending"
+    | "paid_amount"
+    | "outstanding_amount"
+    | "price_pending"
+    | "total_amount"
+    | "invoice_total"
   >,
 ): CodCollectionStatus {
   if (isCodPendingPriceOnly(shipment)) return "AWAITING_PRICE";
+  if (shipment.paid_amount > (shipment.invoice_total ?? shipment.total_amount))
+    return "OVERPAID";
   if (shipment.outstanding_amount <= 0) return "COLLECTED";
   return shipment.paid_amount > 0 ? "PARTIAL" : "PENDING";
 }
@@ -113,7 +122,9 @@ export function buildCodSummary(
       row.payment_mode === "CASH_DESTINATION" &&
       row.shipment_status !== "CANCELLED",
   );
-  const outstanding = pendingCodBills(active);
+  const outstanding = pendingCodBills(active).filter(
+    (row) => codCollectionStatus(row) !== "OVERPAID",
+  );
   const overdue = outstanding.filter((row) => {
     const delivered = dateKey(row.delivered_at);
     return Boolean(delivered && delivered < today);

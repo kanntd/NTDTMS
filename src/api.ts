@@ -20,10 +20,12 @@ import type {
   LoadTripStatus,
   LoadTripUpdate,
   CodPaymentRecord,
+  CodClosureRecord,
 } from "./types";
 import { applyRecordedLoads } from "./loadingQueue";
 import type {
   CodCollectionInput,
+  CodCloseInput,
   CodPaymentMethod,
   CodPaymentMethodOption,
 } from "./codPricing";
@@ -465,8 +467,60 @@ export async function collectPayment(
   );
 }
 export async function collectCodPayment(data: CodCollectionInput) {
-  const result = await supabase.rpc("collect_cod_payment", { data });
+  const result = data.advance
+    ? await supabase.rpc("collect_cod_advance", { data })
+    : await supabase.rpc("collect_cod_payment", { data });
   return check(result) as { payment_id: string; submitted_prices: number };
+}
+export async function closeCodAtActual(data: CodCloseInput) {
+  const result = await supabase.rpc("close_cod_at_actual", { data });
+  return check(result) as {
+    closure_id: string;
+    payment_id: string | null;
+    variance: number;
+  };
+}
+export interface CodClosureQuery {
+  kind: "ALL" | "OVER" | "SHORT";
+  branchAliases?: string[];
+  page: number;
+  pageSize: number;
+}
+export async function getCodClosures(
+  options: CodClosureQuery,
+): Promise<{ rows: CodClosureRecord[]; count: number }> {
+  let query = supabase
+    .from("cod_bill_closures")
+    .select(
+      "id,shipment_id,shipment_no,destination_branch_code,receiver_name,approved_total,received_total,variance,added_discount,added_surcharge,reason,closed_by_name,closed_at",
+      { count: "exact" },
+    )
+    .order("closed_at", { ascending: false })
+    .range(
+      options.page * options.pageSize,
+      (options.page + 1) * options.pageSize - 1,
+    );
+  if (options.branchAliases?.length)
+    query = query.in("destination_branch_code", options.branchAliases);
+  if (options.kind === "OVER") query = query.gt("variance", 0);
+  if (options.kind === "SHORT") query = query.lt("variance", 0);
+  const result = await query;
+  const rows = check(result).map((row) => ({
+    id: String(row.id),
+    shipmentId: String(row.shipment_id),
+    shipmentNo: String(row.shipment_no),
+    destinationBranchCode: String(row.destination_branch_code),
+    receiverName: String(row.receiver_name),
+    approvedTotal: Number(row.approved_total),
+    receivedTotal: Number(row.received_total),
+    variance: Number(row.variance),
+    addedDiscount: Number(row.added_discount),
+    addedSurcharge: Number(row.added_surcharge),
+    reason: String(row.reason || ""),
+    closedByName: String(row.closed_by_name),
+    closedAt: String(row.closed_at),
+  }));
+  return { rows, count: result.count || 0 };
 }
 export async function submitCodItemPrices(
   shipmentId: string,

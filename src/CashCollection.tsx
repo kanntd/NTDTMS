@@ -31,9 +31,11 @@ import { compareBillsByOpenedAt } from "./billNumber";
 import { useWorkspace } from "./context";
 import {
   adjustedCodAmounts,
+  codCloseDifference,
   codLineTotal,
   isCurrencyAmount,
   knownCodPrices,
+  type CodItemPrice,
   type CodPaymentMethod,
   type CodPaymentMethodOption,
 } from "./codPricing";
@@ -76,7 +78,18 @@ const statusLabels: Record<CodCollectionStatus, string> = {
   PARTIAL: "เก็บบางส่วน",
   COLLECTED: "เก็บครบแล้ว",
   AWAITING_PRICE: "รอราคา",
+  OVERPAID: "รับเงินเกิน",
 };
+
+function codPriceProposals(shipment: Shipment, prices: CodItemPrice[]) {
+  return prices.filter((line) => {
+    const item = shipment.items?.find((row) => row.id === line.item_id);
+    return Boolean(
+      item?.product_unit_id &&
+      (item.price_pending || item.unit_price !== line.unit_price),
+    );
+  });
+}
 
 function receiverKey(row: Shipment) {
   return (
@@ -174,7 +187,6 @@ export default function CashCollection() {
   const [editDetail, setEditDetail] = useState<ShipmentDetail | null>(null);
   const [registry, setRegistry] = useState(loadIntakeRegistry);
   const [operations, setOperations] = useState(loadOperations);
-
   const reload = useCallback(async () => {
     setLoading(true);
     if (!canSelectBranch && !profileDestinationCode) {
@@ -249,11 +261,8 @@ export default function CashCollection() {
   useEffect(() => {
     if (!selected) return;
     const frame = requestAnimationFrame(() => {
-      const target = isCodPendingPriceOnly(selected)
-        ? priceRef.current
-        : amountRef.current;
-      target?.focus();
-      target?.select();
+      amountRef.current?.focus();
+      amountRef.current?.select();
     });
     return () => cancelAnimationFrame(frame);
   }, [selected?.id]);
@@ -524,6 +533,11 @@ export default function CashCollection() {
     : 0;
   const remainingItemValue =
     Math.round((originalItemSubtotal - knownItemTotal) * 100) / 100;
+  const enteredCash = Number(amount);
+  const closePreview =
+    selected && isCurrencyAmount(enteredCash) && enteredCash >= 0
+      ? codCloseDifference(selected, enteredCash)
+      : null;
 
   function chooseBill(row: Shipment) {
     setMatchingIds([]);
@@ -535,7 +549,13 @@ export default function CashCollection() {
     }
     setSelected(row);
     setInvoice(row.shipment_no);
-    setAmount(row.outstanding_amount.toFixed(2));
+    setAmount(
+      isCodPendingPriceOnly(row)
+        ? ""
+        : row.outstanding_amount > 0
+          ? row.outstanding_amount.toFixed(2)
+          : "0.00",
+    );
     setAmountTouched(false);
     setDiscount(Number(row.discount || 0).toFixed(2));
     setExpectedDiscount(Number(row.discount || 0));
@@ -621,16 +641,14 @@ export default function CashCollection() {
   }
 
   async function submitPrices() {
-    if (
-      !selected ||
-      selectedUnavailable ||
-      saving ||
-      !isCodPendingPriceOnly(selected)
-    )
+    if (!selected || selectedUnavailable || saving || !selected.price_pending)
       return;
     let prices;
     try {
-      prices = knownCodPrices(selected.items || [], itemPrices).lines;
+      prices = codPriceProposals(
+        selected,
+        knownCodPrices(selected.items || [], itemPrices).lines,
+      );
     } catch (cause) {
       w.toast((cause as Error).message, true);
       return;
@@ -665,14 +683,18 @@ export default function CashCollection() {
       return;
     }
     const adjusted = adjustedCodAmounts(selected, newDiscount);
+    const advance = selected.price_pending && value > adjusted.outstanding;
     if (
       !isCurrencyAmount(value) ||
       value <= 0 ||
-      adjusted.total <= 0 ||
-      value > adjusted.outstanding
+      (advance
+        ? newDiscount !== selected.discount
+        : adjusted.total <= 0 || value > adjusted.outstanding)
     ) {
       w.toast(
-        `ยอดรับเงินจริงต้องมากกว่า 0 และไม่เกิน ${money(Math.max(0, adjusted.outstanding))} บาท หลังหักส่วนลด`,
+        advance
+          ? "เงินรับล่วงหน้ายังปรับส่วนลดไม่ได้ กรุณารอราคายืนยัน"
+          : `ยอดรับเงินจริงต้องมากกว่า 0 และไม่เกิน ${money(Math.max(0, adjusted.outstanding))} บาท หลังหักส่วนลด`,
         true,
       );
       amountRef.current?.focus();
@@ -686,6 +708,9 @@ export default function CashCollection() {
       w.toast((cause as Error).message, true);
       return;
     }
+    if (advance) {
+      prices = codPriceProposals(selected, prices);
+    }
     const customMethod = method.startsWith("CUSTOM:")
       ? methodOptions.find((option) => option.id === method.slice(7))
       : null;
@@ -698,6 +723,7 @@ export default function CashCollection() {
       await w.service.collectCod({
         shipment_id: selected.id,
         amount: value,
+        advance,
         method: customMethod?.base_method || (method as CodPaymentMethod),
         method_option_id: customMethod?.id || null,
         note: note.trim(),
@@ -729,15 +755,109 @@ export default function CashCollection() {
         ...current,
       ]);
       w.toast(
-        remaining > 0
-          ? `รับเงินบิล ${selected.shipment_no} แล้ว เหลือ ${money(remaining)} บาท`
-          : `รับเงินบิล ${selected.shipment_no} ครบแล้ว`,
+        advance
+          ? `รับเงินบิล ${selected.shipment_no} แล้ว ส่วนที่เกินยอดบิลปัจจุบันบันทึกเป็นเงินรับล่วงหน้า`
+          : remaining > 0
+            ? `รับเงินบิล ${selected.shipment_no} แล้ว เหลือ ${money(remaining)} บาท`
+            : `รับเงินบิล ${selected.shipment_no} ครบแล้ว`,
       );
       clearSelection();
     } catch (cause) {
       w.toast((cause as Error).message || "บันทึกรับเงินไม่สำเร็จ", true);
       amountRef.current?.focus();
       amountRef.current?.select();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function closeAtActual() {
+    if (!selected || selectedUnavailable || saving || selected.price_pending)
+      return;
+    const value = Number(amount);
+    const newDiscount = Number(discount || 0);
+    if (
+      !isCurrencyAmount(value) ||
+      value < 0 ||
+      newDiscount !== expectedDiscount
+    ) {
+      w.toast(
+        "กรุณาระบุยอดรับจริงให้ถูกต้อง และบันทึกส่วนลดที่แก้ไขก่อนปิดบิล",
+        true,
+      );
+      return;
+    }
+    const { approvedTotal, receivedTotal, variance } = codCloseDifference(
+      selected,
+      value,
+    );
+    if (receivedTotal <= 0 || variance === 0) {
+      w.toast("ปุ่มนี้ใช้เมื่อยอดรับจริงทั้งบิลต่างจากยอดที่ยืนยันแล้ว", true);
+      return;
+    }
+    const changedItemPrice = (selected.items || []).some(
+      (item) =>
+        itemPrices[item.id]?.trim() &&
+        Number(itemPrices[item.id]) !== item.unit_price,
+    );
+    if (changedItemPrice) {
+      w.toast(
+        "ราคาต่อหน่วยที่แก้ยังไม่บันทึก กรุณาส่งให้บัญชียืนยันก่อนปิดบิล",
+        true,
+      );
+      return;
+    }
+    const customMethod = method.startsWith("CUSTOM:")
+      ? methodOptions.find((option) => option.id === method.slice(7))
+      : null;
+    if (value > 0 && method.startsWith("CUSTOM:") && !customMethod) {
+      w.toast("กรุณาเลือกวิธีรับเงินอีกครั้ง", true);
+      return;
+    }
+    setSaving(true);
+    try {
+      await w.service.closeCod({
+        shipment_id: selected.id,
+        request_id: requestRef.current,
+        amount: value,
+        method: customMethod?.base_method || (method as CodPaymentMethod),
+        method_option_id: customMethod?.id || null,
+        note: note.trim(),
+        expected_total: selected.total_amount,
+        expected_paid: selected.paid_amount,
+        expected_discount: expectedDiscount,
+      });
+      setRows((current) =>
+        current.map((row) =>
+          row.id === selected.id
+            ? {
+                ...row,
+                total_amount:
+                  Math.round((row.total_amount + variance) * 100) / 100,
+                invoice_total: receivedTotal,
+                discount: row.discount + Math.max(0, -variance),
+                extra_charge: row.extra_charge + Math.max(0, variance),
+                paid_amount: receivedTotal,
+                outstanding_amount: 0,
+              }
+            : row,
+        ),
+      );
+      if (value > 0)
+        setPayments((current) => [
+          {
+            shipmentId: selected.id,
+            amount: value,
+            receivedAt: new Date().toISOString(),
+          },
+          ...current,
+        ]);
+      w.toast(
+        `ปิดบิล ${selected.shipment_no} ตามยอดรับจริง ฿ ${money(receivedTotal)} (ราคายืนยัน ฿ ${money(approvedTotal)})`,
+      );
+      clearSelection();
+    } catch (cause) {
+      w.toast((cause as Error).message || "ปิดบิลไม่สำเร็จ", true);
     } finally {
       setSaving(false);
     }
@@ -868,9 +988,7 @@ export default function CashCollection() {
                 เลือกบิล
               </Button>
             </div>
-            <small>
-              กด Enter เพื่อไปที่ยอดรับเงินจริง หรือราคาสินค้าหากบิลยังรอราคา
-            </small>
+            <small>กด Enter เพื่อไปที่ยอดรับเงินจริง</small>
           </form>
 
           {matchingIds.length > 1 ? (
@@ -908,8 +1026,7 @@ export default function CashCollection() {
               className="cod-payment-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (isCodPendingPriceOnly(selected)) void submitPrices();
-                else void saveCollection();
+                void saveCollection();
               }}
             >
               <div className="cod-selected-heading">
@@ -1012,30 +1129,34 @@ export default function CashCollection() {
                   </tbody>
                 </table>
               </div>
-              {!isCodPendingPriceOnly(selected) && (
-                <label className="cod-discount-field">
-                  <span>ส่วนลดทั้งบิล (บาท)</span>
-                  <input
-                    aria-label="ส่วนลดทั้งบิล"
-                    type="number"
-                    inputMode="decimal"
-                    min="0"
-                    step="0.01"
-                    value={discount}
-                    onChange={(event) => {
-                      const next = event.target.value;
-                      setDiscount(next);
-                      if (!amountTouched && Number.isFinite(Number(next))) {
-                        const adjusted = adjustedCodAmounts(
-                          selected,
-                          Number(next || 0),
-                        );
-                        setAmount(Math.max(0, adjusted.outstanding).toFixed(2));
-                      }
-                    }}
-                  />
-                </label>
-              )}
+              <label className="cod-discount-field">
+                <span>ส่วนลดทั้งบิล (บาท)</span>
+                <input
+                  aria-label="ส่วนลดทั้งบิล"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.01"
+                  disabled={isCodPendingPriceOnly(selected)}
+                  title={
+                    isCodPendingPriceOnly(selected)
+                      ? "ปรับส่วนลดได้หลังยืนยันราคาบิล"
+                      : undefined
+                  }
+                  value={discount}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setDiscount(next);
+                    if (!amountTouched && Number.isFinite(Number(next))) {
+                      const adjusted = adjustedCodAmounts(
+                        selected,
+                        Number(next || 0),
+                      );
+                      setAmount(Math.max(0, adjusted.outstanding).toFixed(2));
+                    }
+                  }}
+                />
+              </label>
               <div className="cod-items-summary">
                 <span>
                   {isCodPendingPriceOnly(selected)
@@ -1066,137 +1187,179 @@ export default function CashCollection() {
               <small className="cod-items-hint">
                 ราคารวมคำนวณจากจำนวน × ราคาต่อหน่วย ราคาใหม่ส่งให้บัญชียืนยัน
               </small>
-              {isCodPendingPriceOnly(selected) ? (
-                <div className="cod-price-notice">
-                  <span>
-                    บิลนี้ยังไม่มีราคาที่ยืนยัน จึงยังรับเงินในระบบไม่ได้
-                    ระบุราคาที่ทราบแล้วส่งให้บัญชียืนยันก่อน
-                  </span>
+              <>
+                <div className="cod-payment-fields">
+                  <label className="cod-amount-field">
+                    <span>ยอดรับเงินจริง (บาท)</span>
+                    <div>
+                      <b>฿</b>
+                      <input
+                        ref={amountRef}
+                        aria-label="ยอดรับเงินจริง"
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        step="0.01"
+                        value={amount}
+                        onChange={(event) => {
+                          setAmount(event.target.value);
+                          setAmountTouched(true);
+                        }}
+                        required
+                      />
+                    </div>
+                  </label>
+                  <label>
+                    <span>วิธีรับเงิน</span>
+                    <select
+                      value={method}
+                      onChange={(event) => {
+                        if (event.target.value === "ADD") setAddingMethod(true);
+                        else {
+                          setMethod(event.target.value);
+                          setAddingMethod(false);
+                        }
+                      }}
+                    >
+                      <option value="CASH">เงินสด</option>
+                      <option value="TRANSFER">โอน</option>
+                      <option value="QR">QR Payment</option>
+                      {methodOptions.map((option) => (
+                        <option key={option.id} value={`CUSTOM:${option.id}`}>
+                          {option.label}
+                        </option>
+                      ))}
+                      <option value="ADD">+ เพิ่มวิธีรับเงิน</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>หมายเหตุ</span>
+                    <input
+                      placeholder="พิมพ์หมายเหตุ (ไม่บังคับ)"
+                      maxLength={500}
+                      value={note}
+                      onChange={(event) => setNote(event.target.value)}
+                    />
+                  </label>
                   <Button
                     className="primary"
                     type="submit"
                     busy={saving}
                     disabled={selectedUnavailable}
                   >
-                    ส่งราคาให้บัญชียืนยัน
+                    <HandCoins size={18} />
+                    บันทึกรับเงิน
                   </Button>
                 </div>
-              ) : (
-                <>
-                  <div className="cod-payment-fields">
-                    <label className="cod-amount-field">
-                      <span>ยอดรับเงินจริง (บาท)</span>
-                      <div>
-                        <b>฿</b>
-                        <input
-                          ref={amountRef}
-                          aria-label="ยอดรับเงินจริง"
-                          type="number"
-                          inputMode="decimal"
-                          min="0.01"
-                          max={Math.max(
-                            0,
-                            adjustedSelected?.outstanding ??
-                              selected.outstanding_amount,
-                          )}
-                          step="0.01"
-                          value={amount}
-                          onChange={(event) => {
-                            setAmount(event.target.value);
-                            setAmountTouched(true);
-                          }}
-                          required
-                        />
-                      </div>
+                {!selected.price_pending && (
+                  <div className="cod-close-panel">
+                    <span>
+                      ราคาที่ยืนยัน ฿{" "}
+                      {money(selected.invoice_total ?? selected.total_amount)} ·
+                      รับจริงทั้งบิล{" "}
+                      {closePreview
+                        ? `฿ ${money(closePreview.receivedTotal)}`
+                        : "—"}
+                      {closePreview && closePreview.variance !== 0 && (
+                        <strong>
+                          {" "}
+                          ·{" "}
+                          {closePreview.variance < 0
+                            ? "เงินขาด / ส่วนลดเฉพาะบิล"
+                            : "เงินเกิน / เพิ่มเฉพาะบิล"}{" "}
+                          ฿ {money(Math.abs(closePreview.variance))}
+                        </strong>
+                      )}
+                    </span>
+                    <Button
+                      type="button"
+                      onClick={() => void closeAtActual()}
+                      busy={saving}
+                      disabled={
+                        selectedUnavailable ||
+                        !closePreview ||
+                        closePreview.variance === 0 ||
+                        closePreview.receivedTotal <= 0
+                      }
+                    >
+                      ปิดบิลตามยอดรับจริง
+                    </Button>
+                    <small>
+                      ใช้เมื่อยอดรับนี้เป็นยอดสุดท้าย บิลจะไม่ค้างเก็บต่อ
+                      ราคาต่อหน่วยไม่เปลี่ยน หมายเหตุไม่บังคับ
+                    </small>
+                  </div>
+                )}
+                {addingMethod && (
+                  <div className="cod-add-method">
+                    <label>
+                      ชื่อวิธีรับเงิน
+                      <input
+                        autoFocus
+                        maxLength={80}
+                        value={newMethodName}
+                        onChange={(event) =>
+                          setNewMethodName(event.target.value)
+                        }
+                        placeholder="พิมพ์ชื่อวิธีรับเงิน"
+                      />
                     </label>
                     <label>
-                      <span>วิธีรับเงิน</span>
+                      ประเภท
                       <select
-                        value={method}
-                        onChange={(event) => {
-                          if (event.target.value === "ADD")
-                            setAddingMethod(true);
-                          else {
-                            setMethod(event.target.value);
-                            setAddingMethod(false);
-                          }
-                        }}
+                        value={newMethodCategory}
+                        onChange={(event) =>
+                          setNewMethodCategory(
+                            event.target.value as CodPaymentMethod,
+                          )
+                        }
                       >
                         <option value="CASH">เงินสด</option>
                         <option value="TRANSFER">โอน</option>
                         <option value="QR">QR Payment</option>
-                        {methodOptions.map((option) => (
-                          <option key={option.id} value={`CUSTOM:${option.id}`}>
-                            {option.label}
-                          </option>
-                        ))}
-                        <option value="ADD">+ เพิ่มวิธีรับเงิน</option>
                       </select>
                     </label>
-                    <label>
-                      <span>หมายเหตุ</span>
-                      <input
-                        placeholder="พิมพ์หมายเหตุ (ไม่บังคับ)"
-                        maxLength={500}
-                        value={note}
-                        onChange={(event) => setNote(event.target.value)}
-                      />
-                    </label>
                     <Button
-                      className="primary"
-                      type="submit"
-                      busy={saving}
-                      disabled={selectedUnavailable}
+                      type="button"
+                      onClick={() => void addMethod()}
+                      busy={savingMethod}
                     >
-                      <HandCoins size={18} />
-                      บันทึกรับเงิน
+                      เพิ่มรายการ
                     </Button>
+                    <button
+                      type="button"
+                      onClick={() => setAddingMethod(false)}
+                    >
+                      ยกเลิก
+                    </button>
                   </div>
-                  {addingMethod && (
-                    <div className="cod-add-method">
-                      <label>
-                        ชื่อวิธีรับเงิน
-                        <input
-                          autoFocus
-                          maxLength={80}
-                          value={newMethodName}
-                          onChange={(event) =>
-                            setNewMethodName(event.target.value)
-                          }
-                          placeholder="พิมพ์ชื่อวิธีรับเงิน"
-                        />
-                      </label>
-                      <label>
-                        ประเภท
-                        <select
-                          value={newMethodCategory}
-                          onChange={(event) =>
-                            setNewMethodCategory(
-                              event.target.value as CodPaymentMethod,
-                            )
-                          }
-                        >
-                          <option value="CASH">เงินสด</option>
-                          <option value="TRANSFER">โอน</option>
-                          <option value="QR">QR Payment</option>
-                        </select>
-                      </label>
-                      <Button
-                        type="button"
-                        onClick={() => void addMethod()}
-                        busy={savingMethod}
-                      >
-                        เพิ่มรายการ
-                      </Button>
-                      <button
-                        type="button"
-                        onClick={() => setAddingMethod(false)}
-                      >
-                        ยกเลิก
-                      </button>
-                    </div>
-                  )}
-                </>
+                )}
+              </>
+              {selected.price_pending && (
+                <div className="cod-price-notice">
+                  <span>
+                    ราคายังไม่ครบ: รับเงินจริงได้
+                    โดยส่วนที่เกินยอดบิลปัจจุบันจะเป็นเงินรับล่วงหน้า
+                    และนำไปหักเมื่อบัญชียืนยันราคา
+                  </span>
+                  <Button
+                    type="button"
+                    onClick={() => void submitPrices()}
+                    busy={saving}
+                    disabled={
+                      selectedUnavailable ||
+                      !selected.items?.some(
+                        (item) =>
+                          item.product_unit_id &&
+                          itemPrices[item.id]?.trim() &&
+                          (item.price_pending ||
+                            Number(itemPrices[item.id]) !== item.unit_price),
+                      )
+                    }
+                  >
+                    ส่งราคาให้บัญชียืนยัน
+                  </Button>
+                </div>
               )}
             </form>
           ) : (
@@ -1533,15 +1696,34 @@ export default function CashCollection() {
                       <td>
                         <span
                           className={`cod-status ${paymentStatus.toLowerCase()}`}
+                          title={
+                            paymentStatus === "AWAITING_PRICE" &&
+                            row.paid_amount > 0
+                              ? "รับเงินล่วงหน้าแล้ว รอราคายืนยัน"
+                              : undefined
+                          }
                         >
                           <i />
-                          {statusLabels[paymentStatus]}
+                          {paymentStatus === "AWAITING_PRICE" &&
+                          row.paid_amount > 0
+                            ? "รับล่วงหน้า"
+                            : statusLabels[paymentStatus]}
                         </span>
+                        {paymentStatus === "OVERPAID" && (
+                          <small className="cod-credit-amount">
+                            ฿{" "}
+                            {money(
+                              row.paid_amount -
+                                (row.invoice_total ?? row.total_amount),
+                            )}
+                          </small>
+                        )}
                       </td>
                       <td>
                         <div className="cod-row-actions">
                           {(row.outstanding_amount > 0 ||
-                            isCodPendingPriceOnly(row)) && (
+                            isCodPendingPriceOnly(row) ||
+                            paymentStatus === "OVERPAID") && (
                             <IconButton
                               label={`${isCodPendingPriceOnly(row) ? "เสนอราคาบิล" : "รับเงินบิล"} ${row.shipment_no}`}
                               onClick={() => {

@@ -14,7 +14,9 @@ import { loadOperations, saveOperations } from "./operationsStore";
 import { pairRateKey } from "./intakeEntryData";
 import {
   adjustedCodAmounts,
+  codCloseDifference,
   isCurrencyAmount,
+  type CodCloseInput,
   type CodCollectionInput,
   type CodItemPrice,
   type CodPaymentMethod,
@@ -29,6 +31,7 @@ import type {
   StaffInvite,
   DeliveryInput,
   CodPaymentRecord,
+  CodClosureRecord,
 } from "./types";
 import { ROLE_MODULE_DEFAULTS } from "./types";
 import type {
@@ -53,6 +56,26 @@ const DEMO_PAYMENTS_KEY = "ntdtms-demo-payments-v1";
 const DEMO_COD_ADJUSTMENTS_KEY = "ntdtms-demo-cod-adjustments-v1";
 const DEMO_COD_METHODS_KEY = "ntdtms-demo-cod-methods-v1";
 const DEMO_COD_REQUESTS_KEY = "ntdtms-demo-cod-requests-v1";
+const DEMO_COD_CLOSURES_KEY = "ntdtms-demo-cod-closures-v1";
+
+type DemoCodClosure = CodClosureRecord & {
+  input: CodCloseInput;
+  finalShipmentTotal: number;
+  newDiscount: number;
+  newExtraCharge: number;
+  paymentId: string | null;
+};
+
+function readDemoCodClosures(): DemoCodClosure[] {
+  try {
+    const value = JSON.parse(
+      localStorage.getItem(DEMO_COD_CLOSURES_KEY) || "[]",
+    );
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
 
 function readDemoCodAdjustments(): Record<string, number> {
   try {
@@ -86,10 +109,26 @@ function saveDemoPayments(rows: CodPaymentRecord[]) {
 
 function withDemoPayments<T extends Shipment>(shipment: T): T {
   const discount = readDemoCodAdjustments()[shipment.id] ?? shipment.discount;
+  const closure = readDemoCodClosures().find(
+    (row) => row.shipmentId === shipment.id,
+  );
   const recorded = readDemoPayments()
     .filter((row) => row.shipmentId === shipment.id)
     .reduce((sum, row) => sum + row.amount, 0);
-  const paid = Math.max(shipment.paid_amount, recorded);
+  const paid = Math.round((shipment.paid_amount + recorded) * 100) / 100;
+  if (closure)
+    return {
+      ...shipment,
+      discount: closure.newDiscount,
+      extra_charge: closure.newExtraCharge,
+      total_amount: closure.finalShipmentTotal,
+      invoice_total: closure.receivedTotal,
+      paid_amount: paid,
+      outstanding_amount: Math.max(
+        0,
+        Math.round((closure.receivedTotal - paid) * 100) / 100,
+      ),
+    };
   const due =
     shipment.paid_amount +
     shipment.outstanding_amount +
@@ -574,8 +613,9 @@ export function createService(demo: boolean) {
       if (
         input.discount < 0 ||
         input.amount <= 0 ||
-        input.amount > adjusted.outstanding ||
-        adjusted.total <= 0
+        (input.advance
+          ? !current.price_pending || input.discount !== current.discount
+          : input.amount > adjusted.outstanding || adjusted.total <= 0)
       )
         throw new Error("ยอดรับเงินเกินยอดค้างหลังหักส่วนลด");
       const seenItems = new Set<string>();
@@ -673,6 +713,128 @@ export function createService(demo: boolean) {
       });
       saveDemoPayments(payments);
       return { payment_id: paymentId, submitted_prices: submitted };
+    },
+    closeCod: async (input: CodCloseInput) => {
+      if (!demo) return api.closeCodAtActual(input);
+      const closures = readDemoCodClosures();
+      const existing = closures.find(
+        (row) =>
+          row.input.request_id === input.request_id ||
+          row.shipmentId === input.shipment_id,
+      );
+      if (existing) {
+        if (
+          existing.input.request_id === input.request_id &&
+          JSON.stringify(existing.input) === JSON.stringify(input)
+        )
+          return {
+            closure_id: existing.id,
+            payment_id: existing.paymentId,
+            variance: existing.variance,
+          };
+        throw new Error("บิลนี้ปิดตามยอดรับจริงแล้ว");
+      }
+      const current = allDemoShipments().find(
+        (row) => row.id === input.shipment_id,
+      );
+      if (
+        !current ||
+        current.payment_mode !== "CASH_DESTINATION" ||
+        current.shipment_status === "CANCELLED" ||
+        current.price_pending
+      )
+        throw new Error("บิลนี้ยังไม่มีราคาที่ยืนยันหรือไม่มีสิทธิ์ปิดบิล");
+      if (
+        current.total_amount !== input.expected_total ||
+        current.paid_amount !== input.expected_paid ||
+        current.discount !== input.expected_discount
+      )
+        throw new Error("ยอดบิลหรือเงินรับเปลี่ยนแล้ว กรุณาโหลดข้อมูลใหม่");
+      if (
+        !isCurrencyAmount(input.amount) ||
+        input.amount < 0 ||
+        input.note.trim().length > 500
+      )
+        throw new Error("ยอดรับเงินจริงหรือหมายเหตุไม่ถูกต้อง");
+      if (
+        input.amount > 0 &&
+        input.method_option_id &&
+        !readDemoCodMethods().some(
+          (option) =>
+            option.id === input.method_option_id &&
+            option.base_method === input.method,
+        )
+      )
+        throw new Error("วิธีรับเงินไม่ถูกต้อง");
+      const { approvedTotal, receivedTotal, variance } = codCloseDifference(
+        current,
+        input.amount,
+      );
+      if (receivedTotal <= 0 || variance === 0)
+        throw new Error(
+          "ปิดบิลได้เมื่อยอดรับจริงต่างจากยอดบิลและมีเงินรับแล้ว",
+        );
+      const paymentId = input.amount > 0 ? crypto.randomUUID() : null;
+      const closure: DemoCodClosure = {
+        id: crypto.randomUUID(),
+        input,
+        shipmentId: current.id,
+        shipmentNo: current.shipment_no,
+        destinationBranchCode: current.destination_branch_code || "",
+        receiverName: current.receiver_snapshot.display_name,
+        approvedTotal,
+        receivedTotal,
+        variance,
+        addedDiscount: Math.max(0, -variance),
+        addedSurcharge: Math.max(0, variance),
+        reason: input.note.trim(),
+        closedByName: "ผู้ดูแล NTD",
+        closedAt: new Date().toISOString(),
+        finalShipmentTotal: current.total_amount + variance,
+        newDiscount: current.discount + Math.max(0, -variance),
+        newExtraCharge: current.extra_charge + Math.max(0, variance),
+        paymentId,
+      };
+      if (input.amount > 0) {
+        const payments = readDemoPayments();
+        payments.unshift({
+          shipmentId: current.id,
+          amount: input.amount,
+          receivedAt: closure.closedAt,
+        });
+        saveDemoPayments(payments);
+      }
+      localStorage.setItem(
+        DEMO_COD_CLOSURES_KEY,
+        JSON.stringify([closure, ...closures]),
+      );
+      return {
+        closure_id: closure.id,
+        payment_id: paymentId,
+        variance,
+      };
+    },
+    codClosures: async (options: api.CodClosureQuery) => {
+      if (!demo) return api.getCodClosures(options);
+      const rows = readDemoCodClosures()
+        .filter(
+          (row) =>
+            !options.branchAliases?.length ||
+            options.branchAliases.includes(row.destinationBranchCode),
+        )
+        .filter(
+          (row) =>
+            options.kind === "ALL" ||
+            (options.kind === "OVER" ? row.variance > 0 : row.variance < 0),
+        )
+        .sort((a, b) => b.closedAt.localeCompare(a.closedAt));
+      return {
+        rows: rows.slice(
+          options.page * options.pageSize,
+          (options.page + 1) * options.pageSize,
+        ),
+        count: rows.length,
+      };
     },
     codPayments: async (): Promise<CodPaymentRecord[]> =>
       demo ? readDemoPayments() : api.getCodPayments(),

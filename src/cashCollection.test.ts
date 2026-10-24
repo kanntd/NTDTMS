@@ -67,6 +67,11 @@ describe("COD collection model", () => {
         }),
       ),
     ).toBe("AWAITING_PRICE");
+    expect(
+      codCollectionStatus(
+        shipment({ total_amount: 80, paid_amount: 100, outstanding_amount: 0 }),
+      ),
+    ).toBe("OVERPAID");
   });
 
   it("summarizes outstanding, overdue and today's payments", () => {
@@ -248,5 +253,15 @@ describe("COD collection model", () => {
     expect(
       pendingCodBills([waiting, paid, partlyPaidWaiting]).map((row) => row.id),
     ).toEqual(["unpriced-delivered", "partly-paid-waiting"]);
+    expect(
+      pendingCodBills([
+        shipment({
+          id: "credit",
+          total_amount: 80,
+          paid_amount: 100,
+          outstanding_amount: 0,
+        }),
+      ]).map((row) => row.id),
+    ).toEqual(["credit"]);
   });
 });
