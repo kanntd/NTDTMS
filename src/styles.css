@@ -4645,6 +4645,12 @@ table {
   background: #fff0ed;
   color: #ad5545;
 }
+.cod-credit-amount {
+  display: block;
+  margin-top: 3px;
+  color: #ad5545;
+  font-size: 11px;
+}
 .cod-row-actions {
   display: flex;
   align-items: center;

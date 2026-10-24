@@ -1572,15 +1572,24 @@ export default function CashCollection() {
                       <td>
                         <span
                           className={`cod-status ${paymentStatus.toLowerCase()}`}
+                          title={
+                            paymentStatus === "AWAITING_PRICE" &&
+                            row.paid_amount > 0
+                              ? "รับเงินล่วงหน้าแล้ว รอราคายืนยัน"
+                              : undefined
+                          }
                         >
                           <i />
                           {paymentStatus === "AWAITING_PRICE" &&
                           row.paid_amount > 0
-                            ? "รับล่วงหน้า · รอราคา"
+                            ? "รับล่วงหน้า"
                             : statusLabels[paymentStatus]}
-                          {paymentStatus === "OVERPAID" &&
-                            ` ฿ ${money(row.paid_amount - row.total_amount)}`}
                         </span>
+                        {paymentStatus === "OVERPAID" && (
+                          <small className="cod-credit-amount">
+                            ฿ {money(row.paid_amount - row.total_amount)}
+                          </small>
+                        )}
                       </td>
                       <td>
                         <div className="cod-row-actions">
